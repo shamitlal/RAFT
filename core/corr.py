@@ -2,6 +2,8 @@ import torch
 import torch.nn.functional as F
 from utils.utils import bilinear_sampler, coords_grid
 
+import ipdb
+st = ipdb.set_trace
 try:
     import alt_cuda_corr
 except:

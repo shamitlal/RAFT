@@ -8,6 +8,9 @@ from extractor import BasicEncoder, SmallEncoder
 from corr import CorrBlock, AlternateCorrBlock
 from utils.utils import bilinear_sampler, coords_grid, upflow8
 
+import ipdb 
+st = ipdb.set_trace
+
 try:
     autocast = torch.cuda.amp.autocast
 except:

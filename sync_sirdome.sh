@@ -1,0 +1,1 @@
+rsync -av ./ sirdome:/hdd/shamit/raft

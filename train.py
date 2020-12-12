@@ -21,6 +21,9 @@ import datasets
 
 from torch.utils.tensorboard import SummaryWriter
 
+import ipdb 
+st = ipdb.set_trace
+
 try:
     from torch.cuda.amp import GradScaler
 except:
@@ -163,12 +166,12 @@ def train(args):
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
             image1, image2, flow, valid = [x.cuda() for x in data_blob]
-
+            print("Training: ", i_batch)
             if args.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
-
+            
             flow_predictions = model(image1, image2, iters=args.iters)            
 
             loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
