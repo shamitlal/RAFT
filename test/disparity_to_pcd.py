@@ -8,10 +8,11 @@ st = ipdb.set_trace
 
 device = torch.device('cpu')
 
-disp_f = "/Users/shamitlal/Downloads/Sampler/FlyingThings3D/disparity/0006.pfm"
+disp_f = "/Users/shamitlal/Desktop/shamit/cmu/katefgroup/raft_datasets/Sampler/FlyingThings3D/disparity/0006.pfm"
 rgb_f = "/Users/shamitlal/Downloads/Sampler/FlyingThings3D/RGB_cleanpass/left/0006.png"
-rgb = torch.tensor(flying3d_io.read(rgb_f)).float()
 disparity = flying3d_io.readPFM(disp_f)[0]
+st()
+rgb = torch.tensor(flying3d_io.read(rgb_f)).float()
 disparity = np.ascontiguousarray(disparity, dtype=np.float32)
 disparity = torch.tensor(disparity).unsqueeze(0)
 baseline = torch.tensor([1])
