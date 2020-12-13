@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import torchvision.models as models
+import ipdb 
+st = ipdb.set_trace
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_planes, planes, norm_fn='group', stride=1):
@@ -265,3 +267,29 @@ class SmallEncoder(nn.Module):
             x = torch.split(x, [batch_dim, batch_dim], dim=0)
 
         return x
+
+
+class BasicEncoderRaft3D(nn.Module):
+    def __init__(self):
+        super(BasicEncoderRaft3D, self).__init__()
+        resnet50 = models.resnet50(pretrained=True)
+        modules=list(resnet50.children())[:-4]
+        self.resnet50 = nn.Sequential(*modules)
+        self.conv1 = nn.Conv2d(512, 512, 3, padding=1)
+        self.relu1 = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(512, 512, 3, padding=1)
+
+    def forward(self, x):
+        x = self.resnet50(x)
+        x = self.conv1(x)
+        x = self.relu1(x)
+        x = self.conv2(x)
+        return x
+
+
+
+if __name__ == '__main__':
+    raft = BasicEncoderRaft3D()
+    inp = torch.rand(1,3,224,224)
+    out = raft(inp)
+    print(out.shape)
