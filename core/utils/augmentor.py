@@ -3,6 +3,8 @@ import random
 import math
 from PIL import Image
 
+import ipdb 
+st = ipdb.set_trace
 import cv2
 cv2.setNumThreads(0)
 cv2.ocl.setUseOpenCL(False)
@@ -111,7 +113,8 @@ class FlowAugmentor:
     def __call__(self, img1, img2, flow):
         img1, img2 = self.color_transform(img1, img2)
         img1, img2 = self.eraser_transform(img1, img2)
-        img1, img2, flow = self.spatial_transform(img1, img2, flow)
+        # TODO: turning off spatial transform for now
+        # img1, img2, flow = self.spatial_transform(img1, img2, flow)
 
         img1 = np.ascontiguousarray(img1)
         img2 = np.ascontiguousarray(img2)

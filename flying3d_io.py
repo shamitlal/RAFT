@@ -184,3 +184,8 @@ def writeFloat(name, data):
 
     else:
         np.transpose(data, (2, 0, 1)).tofile(f)
+
+def get_origin_T_camX_from_string(string):
+    origin_T_camX = string.split(' ')
+    origin_T_camX = np.array([float(i) for i in origin_T_camX]).reshape(4,4)
+    return origin_T_camX

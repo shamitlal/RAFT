@@ -7,7 +7,7 @@ from update import BasicUpdateBlock, SmallUpdateBlock
 from extractor import BasicEncoder, SmallEncoder, BasicEncoderRaft3D
 from corr import CorrBlock, AlternateCorrBlock
 from utils.utils import bilinear_sampler, coords_grid, upflow8
-
+import pydisco_utils
 import ipdb 
 st = ipdb.set_trace
 
@@ -37,7 +37,7 @@ class RAFT(nn.Module):
         
         else:
             self.hidden_dim = hdim = 128
-            self.context_dim = cdim = 128
+            self.context_dim = cdim = 128*3
             args.corr_levels = 4
             args.corr_radius = 4
 
@@ -55,8 +55,8 @@ class RAFT(nn.Module):
 
         else:
             self.fnet = BasicEncoder(output_dim=256, norm_fn='instance', dropout=args.dropout)        
-            self.cnet = BasicEncoder(output_dim=hdim+cdim, norm_fn='batch', dropout=args.dropout)
-            # self.cnet_3d = BasicEncoderRaft3D() # TODO: uncomment to use raft3d context encoder
+            # self.cnet = BasicEncoder(output_dim=hdim+cdim, norm_fn='batch', dropout=args.dropout)
+            self.cnet = BasicEncoderRaft3D() 
             self.update_block = BasicUpdateBlock(self.args, hidden_dim=hdim)
 
     def freeze_bn(self):
@@ -73,6 +73,9 @@ class RAFT(nn.Module):
         # optical flow computed as difference: flow = coords1 - coords0
         return coords0, coords1
 
+    def initialize_translation(self, img):
+        return torch.zeros((img.shape[0], img.shape[2]//8, img.shape[3]//8, 3)).to(img.device)
+
     def upsample_flow(self, flow, mask):
         """ Upsample flow field [H/8, W/8, 2] -> [H, W, 2] using convex combination """
         N, _, H, W = flow.shape
@@ -80,14 +83,14 @@ class RAFT(nn.Module):
         mask = torch.softmax(mask, dim=2)
 
         up_flow = F.unfold(8 * flow, [3,3], padding=1)
-        up_flow = up_flow.view(N, 2, 9, 1, 1, H, W)
+        up_flow = up_flow.view(N, 3, 9, 1, 1, H, W)
 
         up_flow = torch.sum(mask * up_flow, dim=2)
         up_flow = up_flow.permute(0, 1, 4, 2, 5, 3)
-        return up_flow.reshape(N, 2, 8*H, 8*W)
+        return up_flow.reshape(N, 3, 8*H, 8*W)
 
 
-    def forward(self, image1, image2, iters=12, flow_init=None, upsample=True, test_mode=False):
+    def forward(self, image1, image2, depth1_fullres, depth2_fullres, pix_T_camXs_fullres, iters=12, flow_init=None, upsample=True, test_mode=False):
         """ Estimate optical flow between pair of frames """
 
         image1 = 2 * (image1 / 255.0) - 1.0
@@ -96,12 +99,17 @@ class RAFT(nn.Module):
         image1 = image1.contiguous()
         image2 = image2.contiguous()
 
-        hdim = self.hidden_dim
+        depth1 = F.interpolate(depth1_fullres, scale_factor=1./8, mode="nearest")
+        depth2 = F.interpolate(depth2_fullres, scale_factor=1./8, mode="nearest")
+
+        pix_T_camXs = pydisco_utils.scale_intrinsics(pix_T_camXs_fullres, 1./8, 1./8)
+
+        hdim = self.hidden_dim  
         cdim = self.context_dim
 
         # run the feature network
         with autocast(enabled=self.args.mixed_precision):
-            fmap1, fmap2 = self.fnet([image1, image2])        
+            fmap1, fmap2 = self.fnet([image1, image2])
         
         fmap1 = fmap1.float()
         fmap2 = fmap2.float()
@@ -117,32 +125,38 @@ class RAFT(nn.Module):
             net = torch.tanh(net)
             inp = torch.relu(inp)
 
-        coords0, coords1 = self.initialize_flow(image1)
+        # coords0, coords1 = self.initialize_flow(image1)
+        translations = self.initialize_translation(image1)
 
-        if flow_init is not None:
-            coords1 = coords1 + flow_init
 
-        flow_predictions = []
+        # if flow_init is not None:
+        #     coords1 = coords1 + flow_init
+
+        motion_predictions = []
+
         for itr in range(iters):
-            coords1 = coords1.detach()
+            flow, coords1 = pydisco_utils.get_flow_field(depth1, translations, pix_T_camXs)
+            d_dash_bar = pydisco_utils.grid_sample(depth2, coords1)
+            redidual_depth = depth2 - d_dash_bar 
+
+            # coords1 = coords1.detach()
+            # flow = flow.detach()
             corr = corr_fn(coords1) # index correlation volume
 
-            flow = coords1 - coords0
+            # flow = coords1 - coords0
             with autocast(enabled=self.args.mixed_precision):
-                net, up_mask, delta_flow = self.update_block(net, inp, corr, flow)
+                # send translations instead of twist for now.
+                # net, up_mask, delta_flow = self.update_block(net, inp, corr, flow, redidual_depth, translations)
+                net, revisions, weights, embeddings, up_mask = self.update_block(net, inp, corr, flow, redidual_depth, translations)
 
-            # F(t+1) = F(t) + \Delta(t)
-            coords1 = coords1 + delta_flow
-
-            # upsample predictions
-            if up_mask is None:
-                flow_up = upflow8(coords1 - coords0)
-            else:
-                flow_up = self.upsample_flow(coords1 - coords0, up_mask)
+            translations = translations + revisions.permute(0,2,3,1)
+            # coords1 = coords1 + delta_flow
             
-            flow_predictions.append(flow_up)
+            translations_up = self.upsample_flow(translations.permute(0,3,1,2), up_mask)
+            
+            motion_predictions.append(translations_up)
 
         if test_mode:
-            return coords1 - coords0, flow_up
+            return translations, translations_up
             
-        return flow_predictions
+        return motion_predictions

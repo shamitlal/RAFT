@@ -21,6 +21,7 @@ class FlowDataset(data.Dataset):
     def __init__(self, aug_params=None, sparse=False):
         self.augmentor = None
         self.sparse = sparse
+        # TODO: Check augmentations for disparities for raft3d
         if aug_params is not None:
             if sparse:
                 self.augmentor = SparseFlowAugmentor(**aug_params)
@@ -31,6 +32,7 @@ class FlowDataset(data.Dataset):
         self.init_seed = False
         self.flow_list = []
         self.image_list = []
+        self.disparity_list = []
         self.extra_info = []
 
     def __getitem__(self, index):
@@ -42,7 +44,14 @@ class FlowDataset(data.Dataset):
             img2 = np.array(img2).astype(np.uint8)[..., :3]
             img1 = torch.from_numpy(img1).permute(2, 0, 1).float()
             img2 = torch.from_numpy(img2).permute(2, 0, 1).float()
-            return img1, img2, self.extra_info[index]
+
+            disp1 = frame_utils.read_gen(self.disparity_list[index][0])[0]
+            disp2 = frame_utils.read_gen(self.disparity_list[index][1])[0]
+            disp1 = np.array(disp1)
+            disp2 = np.array(disp2)
+            disp1 = torch.from_numpy(disp1).float()
+            disp2 = torch.from_numpy(disp2).float()
+            return img1, img2, disp1, disp2, self.extra_info[index]
 
         if not self.init_seed:
             worker_info = torch.utils.data.get_worker_info()
@@ -56,16 +65,24 @@ class FlowDataset(data.Dataset):
         valid = None
         if self.sparse:
             flow, valid = frame_utils.readFlowKITTI(self.flow_list[index])
+            # TODO: fix this for disparity, if its ever used.
+            st()
         else:
             flow = frame_utils.read_gen(self.flow_list[index])
-
+        
         img1 = frame_utils.read_gen(self.image_list[index][0])
         img2 = frame_utils.read_gen(self.image_list[index][1])
+
+        disp1 = frame_utils.read_gen(self.disparity_list[index][0])
+        disp2 = frame_utils.read_gen(self.disparity_list[index][1])
 
         flow = np.array(flow).astype(np.float32)
         img1 = np.array(img1).astype(np.uint8)
         img2 = np.array(img2).astype(np.uint8)
 
+        disp1 = np.array(disp1)
+        disp2 = np.array(disp2)
+        
         # grayscale images
         if len(img1.shape) == 2:
             img1 = np.tile(img1[...,None], (1, 1, 3))
@@ -84,12 +101,15 @@ class FlowDataset(data.Dataset):
         img2 = torch.from_numpy(img2).permute(2, 0, 1).float()
         flow = torch.from_numpy(flow).permute(2, 0, 1).float()
 
+        disp1 = torch.from_numpy(disp1).float()
+        disp2 = torch.from_numpy(disp2).float()
+
         if valid is not None:
             valid = torch.from_numpy(valid)
         else:
             valid = (flow[0].abs() < 1000) & (flow[1].abs() < 1000)
 
-        return img1, img2, flow, valid.float()
+        return img1, img2, disp1, disp2, flow, valid.float()
 
 
     def __rmul__(self, v):
@@ -136,27 +156,39 @@ class FlyingChairs(FlowDataset):
                 self.image_list += [ [images[2*i], images[2*i+1]] ]
 
 
+# RGB dir structure = flyingThings3D/frames_cleanpass/TRAIN/<>/<>/left/
+# Disparity dir structure = flyingThings3D/depth_cleanpass/TRAIN/<>/<>/disparity/
+# Opt flow dir structure = flyingThings3D/optical_flow/TRAIN/<>/<>/future/left/
 class FlyingThings3D(FlowDataset):
     def __init__(self, aug_params=None, root='datasets/FlyingThings3D', dstype='frames_cleanpass'):
         super(FlyingThings3D, self).__init__(aug_params)
-        # st()
+
+        self.pix_T_camXs =  np.array([[1050.0, 0.0, 479.5, 0],
+                            [0.0, 1050.0, 269.5, 0],
+                            [0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0]])
         for cam in ['left']:
             for direction in ['into_future', 'into_past']:
                 image_dirs = sorted(glob(osp.join(root, dstype, 'TRAIN/*/*')))
                 image_dirs = sorted([osp.join(f, cam) for f in image_dirs])
-                # flyingThings3D/TRAIN/<>/<>/left/
+
+                disp_dirs = sorted(glob(osp.join(root, f"depth_{dstype.split('_')[1]}", 'TRAIN/*/*')))
+                disp_dirs = sorted([osp.join(f, "disparity") for f in disp_dirs])
+                
                 flow_dirs = sorted(glob(osp.join(root, 'optical_flow/TRAIN/*/*')))
                 flow_dirs = sorted([osp.join(f, direction, cam) for f in flow_dirs])
-                # flyingThings3D/optical_flow/TRAIN/<>/<>/future/left/
-
-                for idir, fdir in zip(image_dirs, flow_dirs):
+               
+                for idir, fdir, ddir in zip(image_dirs, flow_dirs, disp_dirs):
                     images = sorted(glob(osp.join(idir, '*.png')) )
                     flows = sorted(glob(osp.join(fdir, '*.pfm')) )
+                    disparities = sorted(glob(osp.join(ddir, '*.pfm')) )
                     for i in range(len(flows)-1):
                         if direction == 'into_future':
+                            self.disparity_list += [ [disparities[i], disparities[i+1]] ]
                             self.image_list += [ [images[i], images[i+1]] ]
                             self.flow_list += [ flows[i] ]
                         elif direction == 'into_past':
+                            self.disparity_list += [ [disparities[i+1], disparities[i]] ]
                             self.image_list += [ [images[i+1], images[i]] ]
                             self.flow_list += [ flows[i+1] ]
       
@@ -231,7 +263,7 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         train_dataset = KITTI(aug_params, split='training')
 
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, 
-        pin_memory=False, shuffle=True, num_workers=4, drop_last=True)
+        pin_memory=False, shuffle=True, num_workers=0, drop_last=True)
 
     print('Training with %d image pairs' % len(train_dataset))
     return train_loader

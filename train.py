@@ -21,6 +21,8 @@ import datasets
 
 from torch.utils.tensorboard import SummaryWriter
 
+import pydisco_utils
+
 import ipdb 
 st = ipdb.set_trace
 
@@ -47,10 +49,10 @@ SUM_FREQ = 100
 VAL_FREQ = 5000
 
 
-def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
+def sequence_loss(motion_preds, flow_gt, valid, depth1, depth2, pix_T_camXs, gamma=0.8, max_flow=MAX_FLOW):
     """ Loss function defined over sequence of flow predictions """
 
-    n_predictions = len(flow_preds)    
+    n_predictions = len(motion_preds)    
     flow_loss = 0.0
 
     # exlude invalid pixels and extremely large diplacements
@@ -59,10 +61,14 @@ def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
 
     for i in range(n_predictions):
         i_weight = gamma**(n_predictions - i - 1)
-        i_loss = (flow_preds[i] - flow_gt).abs()
+        flow_pred_i, coords1_i = pydisco_utils.get_flow_field(depth1, motion_preds[i], pix_T_camXs)
+        flow_pred_i = flow_pred_i.permute(0,3,1,2)
+        d_dash_bar = pydisco_utils.grid_sample(depth2, coords1_i)
+        i_loss = (flow_pred_i - flow_gt).abs()
         flow_loss += i_weight * (valid[:, None] * i_loss).mean()
 
-    epe = torch.sum((flow_preds[-1] - flow_gt)**2, dim=1).sqrt()
+
+    epe = torch.sum((flow_pred_i - flow_gt)**2, dim=1).sqrt()
     epe = epe.view(-1)[valid.view(-1)]
 
     metrics = {
@@ -71,6 +77,7 @@ def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
         '3px': (epe < 3).float().mean().item(),
         '5px': (epe < 5).float().mean().item(),
     }
+    print("flow loss: ", flow_loss)
 
     return flow_loss, metrics
 
@@ -165,16 +172,24 @@ def train(args):
 
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
-            image1, image2, flow, valid = [x.cuda() for x in data_blob]
+            image1, image2, disp1, disp2, flow, valid = [x.cuda() for x in data_blob]
+
+            B = image1.shape[0]
+            pix_T_camXs = pydisco_utils.get_pix_T_camX(args.stage, image1.shape[0])
+            depth1 = pydisco_utils.disp2depth(torch.ones(B).cuda(), pix_T_camXs[:,0,0], disp1)
+            depth2 = pydisco_utils.disp2depth(torch.tensor(B).cuda(), pix_T_camXs[:,0,0], disp2)
+            
+            image1, image2, depth1, depth2, flow, valid, pix_T_camXs = rescale_stuff(image1, image2, depth1, depth2, flow, valid, pix_T_camXs)
+
             print("Training: ", i_batch)
             if args.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
             
-            flow_predictions = model(image1, image2, iters=args.iters)            
+            motion_predictions = model(image1, image2, depth1, depth2, pix_T_camXs, iters=args.iters)            
 
-            loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
+            loss, metrics = sequence_loss(motion_predictions, flow, valid, depth1, depth2, pix_T_camXs, args.gamma)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)                
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
@@ -216,6 +231,20 @@ def train(args):
 
     return PATH
 
+def rescale_stuff(img1, img2, depth1, depth2, flow, valid, pix_T_camX):
+    
+    sy = 400.0/img1.shape[2]
+    sx = 720.0/img1.shape[3]
+    img1 = F.interpolate(img1, (400, 720), mode="bilinear")
+    img2 = F.interpolate(img2, (400, 720), mode="bilinear")
+    depth1 = F.interpolate(depth1, (400, 720), mode="nearest")
+    depth2 = F.interpolate(depth2, (400, 720), mode="nearest")
+    flow = F.interpolate(flow, (400, 720), mode="bilinear")
+    flow = flow * torch.tensor([sx, sy]).reshape(1,2,1,1).to(flow.device)
+
+    valid = (flow[0].abs() < 1000) & (flow[1].abs() < 1000)
+    pix_T_camX = pydisco_utils.scale_intrinsics(pix_T_camX, sx, sy)
+    return img1, img2, depth1, depth2, flow, valid, pix_T_camX
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

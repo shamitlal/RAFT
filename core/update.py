@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import ipdb 
+st = ipdb.set_trace
 
 class FlowHead(nn.Module):
     def __init__(self, input_dim=128, hidden_dim=256):
@@ -116,24 +117,56 @@ class BasicUpdateBlock(nn.Module):
         super(BasicUpdateBlock, self).__init__()
         self.args = args
         self.encoder = BasicMotionEncoder(args)
-        self.gru = SepConvGRU(hidden_dim=hidden_dim, input_dim=128+hidden_dim)
-        self.flow_head = FlowHead(hidden_dim, hidden_dim=256)
+        self.gru = SepConvGRU(hidden_dim=hidden_dim, input_dim=128*3)
+        # self.flow_head = FlowHead(hidden_dim, hidden_dim=256)
+
+        # TODO: change this when you replace translation with twist.
+        self.input_processor = nn.Sequential(
+            nn.Conv2d(6, 128, 7, padding=3),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128*3, 3, padding=1))
+        
+        self.corr_processor = nn.Sequential(
+            nn.Conv2d(324, 256, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 128*3, 3, padding=1))
+
+        self.embeddingnet = nn.Sequential(
+            nn.Conv2d(128, 256, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 32, 3, padding=1))
+
+        self.weightsnet = nn.Sequential(
+            nn.Conv2d(128, 256, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 3, 3, padding=1),
+            nn.Sigmoid())
+
+        self.revisionsnet = nn.Sequential(
+            nn.Conv2d(128, 256, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 3, 3, padding=1))
 
         self.mask = nn.Sequential(
             nn.Conv2d(128, 256, 3, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(256, 64*9, 1, padding=0))
 
-    def forward(self, net, inp, corr, flow, upsample=True):
-        motion_features = self.encoder(flow, corr)
-        inp = torch.cat([inp, motion_features], dim=1)
+    def forward(self, net, inp, corr, flow, residual_depth, translation, upsample=True):
+        flow = flow.permute(0,3,1,2)
+        translation = translation.permute(0,3,1,2)
+        motion_features = self.input_processor(torch.cat([flow, residual_depth, translation], dim=1))
+        corr_features = self.corr_processor(corr)
 
-        net = self.gru(net, inp)
-        delta_flow = self.flow_head(net)
+        input = inp + corr_features + motion_features
+        net = self.gru(net, input)
 
-        # scale mask to balence gradients
+        revisions = self.revisionsnet(net)
+
+        weights = self.weightsnet(net)
+        embeddings = self.embeddingnet(net)
+
         mask = .25 * self.mask(net)
-        return net, mask, delta_flow
-
-
-
+        return net, revisions, weights, embeddings, mask

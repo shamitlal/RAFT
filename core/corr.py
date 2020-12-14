@@ -16,7 +16,7 @@ class CorrBlock:
         self.num_levels = num_levels
         self.radius = radius
         self.corr_pyramid = []
-
+        # st()
         # all pairs correlation
         corr = CorrBlock.corr(fmap1, fmap2)
 
@@ -30,9 +30,8 @@ class CorrBlock:
 
     def __call__(self, coords):
         r = self.radius
-        coords = coords.permute(0, 2, 3, 1)
+        # coords = coords.permute(0, 2, 3, 1)
         batch, h1, w1, _ = coords.shape
-
         out_pyramid = []
         for i in range(self.num_levels):
             corr = self.corr_pyramid[i]

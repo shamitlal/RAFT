@@ -23,6 +23,7 @@ rgb1_ = rgb1.reshape(-1,3)
 rgb2 = flying3d_io.read(rgb2)
 
 disparity = flying3d_io.readPFM(disp_f)[0]
+st()
 disparity = np.ascontiguousarray(disparity, dtype=np.float32)
 disparity = torch.tensor(disparity).unsqueeze(0)
 baseline = torch.tensor([1])
