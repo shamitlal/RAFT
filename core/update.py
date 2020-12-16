@@ -122,7 +122,7 @@ class BasicUpdateBlock(nn.Module):
 
         # TODO: change this when you replace translation with twist.
         self.input_processor = nn.Sequential(
-            nn.Conv2d(6, 128, 7, padding=3),
+            nn.Conv2d(9, 128, 7, padding=3),
             nn.ReLU(inplace=True),
             nn.Conv2d(128, 128*3, 3, padding=1))
         
@@ -153,11 +153,27 @@ class BasicUpdateBlock(nn.Module):
             nn.Conv2d(128, 256, 3, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(256, 64*9, 1, padding=0))
+    
+    '''
+    ipdb> net.shape
+    torch.Size([2, 128, 40, 90])
+    ipdb> inp.shape
+    torch.Size([2, 384, 40, 90])
+    ipdb> corr.shape
+    torch.Size([2, 324, 40, 90])
+    ipdb> flow.shape
+    torch.Size([2, 2, 40, 90])
+    ipdb> residual_depth.shape
+    torch.Size([2, 1, 40, 90])
+    ipdb> twist.shape
+    torch.Size([2, 6, 40, 90])
+    '''
+    def forward(self, net, inp, corr, flow, residual_depth, twist, upsample=True):
 
-    def forward(self, net, inp, corr, flow, residual_depth, translation, upsample=True):
         flow = flow.permute(0,3,1,2)
-        translation = translation.permute(0,3,1,2)
-        motion_features = self.input_processor(torch.cat([flow, residual_depth, translation], dim=1))
+
+        twist = twist.permute(0,3,1,2)
+        motion_features = self.input_processor(torch.cat([flow, residual_depth, twist], dim=1))
         corr_features = self.corr_processor(corr)
 
         input = inp + corr_features + motion_features

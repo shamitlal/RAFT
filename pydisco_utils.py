@@ -184,17 +184,25 @@ def apply_pix_T_cam(pix_T_cam, xyz):
     xy = torch.stack([x, y], axis=-1)
     return xy
 
-def get_flow_field(depth, translation, pix_T_camX):
-    # TODO: after baseline, change translation to T
+def get_flow_field(depth, Tmat, pix_T_camX):
+
     B, _, H, W = depth.shape
     xyz_camXS = depth2pointcloud(depth, pix_T_camX)
     proj_xyS = apply_pix_T_cam(pix_T_camX, xyz_camXS)
+    
+    B, N, _= xyz_camXS.shape
+    xyz_camXS_ = xyz_camXS.reshape(B*N, 1, 3)
+    Tmat_ = Tmat.reshape(B*H*W, 4, 4)
+    xyz_camXT_ = apply_4x4(Tmat_, xyz_camXS_)
+    xyz_camXT = xyz_camXT_.reshape(B, N, 3)
 
-    xyz_camXT = xyz_camXS + translation.reshape(B, H*W, 3)
+    depth_camXT = xyz_camXT[:,:,2].reshape(B,1,H,W)
+    inv_depth_camXT = 1./(depth_camXT + 1e-5)
+
     proj_xyT = apply_pix_T_cam(pix_T_camX, xyz_camXT)
     flow_field = proj_xyT - proj_xyS
 
-    return flow_field.reshape(B,H,W,-1), proj_xyT.reshape(B,H,W,-1)
+    return flow_field.reshape(B,H,W,-1), proj_xyT.reshape(B,H,W,-1), inv_depth_camXT
 
     
 def create_depth_image_single(xy, z, H, W):
@@ -253,6 +261,10 @@ def eye_4x4(B):
     rt = torch.eye(4, device=device).view(1,4,4).repeat([B, 1, 1])
     return rt
 
+def eye_3x3(B):
+    rt = torch.eye(3, device=device).view(1,3,3).repeat([B, 1, 1])
+    return rt
+
 def grid_sample(input, grid, isnormalized=False):
     B, _, H, W = input.shape
     if not isnormalized:
@@ -262,3 +274,21 @@ def grid_sample(input, grid, isnormalized=False):
     out = F.grid_sample(input, grid, mode="nearest", padding_mode="border")
     return out 
 
+def pie(xyz_camX, pix_T_camXs, H, W):
+    '''
+    xyz_camX - BN3
+    pix_T_camXs - B44
+    out - BN3
+    '''
+    proj_xy_camX = apply_pix_T_cam(pix_T_camXs, xyz_camX)
+    depths = xyz_camX[:,:,2]
+    inverse_depths = 1./(depths + 1e-5)
+    inverse_depths = inverse_depths.unsqueeze(-1)
+    out = torch.cat([proj_xy_camX, inverse_depths], dim=-1)
+    return out
+
+
+def pie_inv(proj_xyz, pix_T_camXs):
+    proj_xy_camX = proj_xyz[:, :, :2]
+    inv_depth_camX = proj_xyz[:, :, -1]
+    depth_camX = 1./inv_depth_camX

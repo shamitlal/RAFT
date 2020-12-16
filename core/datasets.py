@@ -28,6 +28,7 @@ class FlowDataset(data.Dataset):
             else:
                 self.augmentor = FlowAugmentor(**aug_params)
 
+        self.debug = True # dont apply any augmentation
         self.is_test = False
         self.init_seed = False
         self.flow_list = []
@@ -91,7 +92,7 @@ class FlowDataset(data.Dataset):
             img1 = img1[..., :3]
             img2 = img2[..., :3]
 
-        if self.augmentor is not None:
+        if self.augmentor is not None and not self.debug:
             if self.sparse:
                 img1, img2, flow, valid = self.augmentor(img1, img2, flow, valid)
             else:
