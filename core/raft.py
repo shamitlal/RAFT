@@ -102,6 +102,9 @@ class RAFT(nn.Module):
         depth1 = F.interpolate(depth1_fullres, scale_factor=1./8, mode="nearest")
         depth2 = F.interpolate(depth2_fullres, scale_factor=1./8, mode="nearest")
 
+        inv_depth1 = 1./(depth1 + 1e-5)
+        inv_depth2 = 1./(depth2 + 1e-5)
+
         pix_T_camXs = pydisco_utils.scale_intrinsics(pix_T_camXs_fullres, 1./8, 1./8)
 
         hdim = self.hidden_dim  
@@ -135,9 +138,9 @@ class RAFT(nn.Module):
         motion_predictions = []
 
         for itr in range(iters):
-            flow, coords1 = pydisco_utils.get_flow_field(depth1, translations, pix_T_camXs)
-            d_dash_bar = pydisco_utils.grid_sample(depth2, coords1)
-            redidual_depth = depth2 - d_dash_bar 
+            flow, coords1, d_dash = pydisco_utils.get_flow_field(depth1, translations, pix_T_camXs)
+            d_dash_bar = pydisco_utils.grid_sample(inv_depth2, coords1)
+            redidual_depth = d_dash - d_dash_bar 
 
             # coords1 = coords1.detach()
             # flow = flow.detach()

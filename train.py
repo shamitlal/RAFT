@@ -22,6 +22,7 @@ import datasets
 from torch.utils.tensorboard import SummaryWriter
 
 import pydisco_utils
+import flow_vis
 
 import ipdb 
 st = ipdb.set_trace
@@ -45,15 +46,91 @@ except:
 
 # exclude extremly large displacements
 MAX_FLOW = 400
-SUM_FREQ = 100
+SUM_FREQ = 1
 VAL_FREQ = 5000
 
+def get_gt_scene_flow(flow_gt, depth1, depth2):
+
+    B, _, H, W = flow_gt.shape
+    ycoords, xcoords = torch.meshgrid(torch.arange(H), torch.arange(W))
+    ycoords, xcoords = ycoords.to(flow_gt.device), xcoords.to(flow_gt.device)
+    grid = torch.stack([xcoords, ycoords]).unsqueeze(0).repeat(B, 1, 1, 1)
+    grid_flowed = grid + flow_gt
+    
+    inv_depth1 = 1./(depth1 + 1e-5)
+    inv_depth2 = 1./(depth2 + 1e-5)
+
+    inv_depth2_sampled = pydisco_utils.grid_sample(inv_depth2, grid_flowed.permute(0,2,3,1))
+    inv_depth_change = inv_depth2_sampled - inv_depth1
+
+    scene_flow_gt = torch.cat([flow_gt, inv_depth_change], dim=1)
+    return scene_flow_gt
+
+
+# def sequence_loss(motion_preds, flow_gt, valid, depth1, depth2, pix_T_camXs, gamma=0.8, max_flow=MAX_FLOW):
+#     """ Loss function defined over sequence of flow predictions """
+
+#     n_predictions = len(motion_preds)    
+#     flow_loss = 0.0
+
+#     # exlude invalid pixels and extremely large diplacements
+#     mag = torch.sum(flow_gt**2, dim=1).sqrt()
+#     valid = (valid >= 0.5) & (mag < max_flow)
+
+#     for i in range(n_predictions):
+#         i_weight = gamma**(n_predictions - i - 1)
+#         flow_pred_i, coords1_i = pydisco_utils.get_flow_field(depth1, motion_preds[i], pix_T_camXs)
+#         flow_pred_i = flow_pred_i.permute(0,3,1,2)
+#         d_dash_bar = pydisco_utils.grid_sample(depth2, coords1_i)
+#         i_loss = (flow_pred_i - flow_gt).abs()
+#         flow_loss += i_weight * (valid[:, None] * i_loss).mean()
+
+
+#     epe = torch.sum((flow_pred_i - flow_gt)**2, dim=1).sqrt()
+#     epe = epe.view(-1)[valid.view(-1)]
+
+#     metrics = {
+#         'epe': epe.mean().item(),
+#         '1px': (epe < 1).float().mean().item(),
+#         '3px': (epe < 3).float().mean().item(),
+#         '5px': (epe < 5).float().mean().item(),
+#     }
+#     print("flow loss: ", flow_loss)
+
+#     return flow_loss, metrics
+
+def visualize_flow(motion_pred, image1, image2, depth1, pix_T_camXs):
+    B, _, H, W = image1.shape
+    ycoords, xcoords = torch.meshgrid(torch.arange(H), torch.arange(W))
+    flow_pred_i, coords1_i, d_dash_i = pydisco_utils.get_flow_field(depth1, motion_pred.permute(0,2,3,1), pix_T_camXs)
+
+    # flow_color = flow_vis.flow_to_color(flow_pred_i[0].cpu().detach().numpy(), convert_to_bgr=False)*1.0
+    # flow_color = flow_color.transpose(2,0,1)
+
+    out = torch.zeros_like(image1).to(image1.device)
+
+    ycoords, xcoords = torch.meshgrid(torch.arange(H), torch.arange(W))
+    ycoords, xcoords = ycoords.to(image1.device), xcoords.to(image1.device)
+    grid = torch.stack([xcoords, ycoords]).unsqueeze(0).repeat(B, 1, 1, 1)
+    grid = grid.permute(0,2,3,1)
+    grid_flowed = grid + flow_pred_i
+    grid_flowed[:,:,:,0] = torch.clip(grid_flowed[:,:,:,0], 0, W-1)
+    grid_flowed[:,:,:,1] = torch.clip(grid_flowed[:,:,:,1], 0, H-1)
+    grid_flowed = grid_flowed.long()
+    grid = grid.long()
+    out[0, :, grid_flowed[:,:,:,1], grid_flowed[:,:,:,0]] = image1[0, :, grid[:,:,:,1], grid[:,:,:,0]]
+    vis = torch.cat([out[0:1], image1[0:1], image2[0:1]], dim=-1)
+    return vis, flow_pred_i #torch.tensor(flow_color).unsqueeze(0)
 
 def sequence_loss(motion_preds, flow_gt, valid, depth1, depth2, pix_T_camXs, gamma=0.8, max_flow=MAX_FLOW):
     """ Loss function defined over sequence of flow predictions """
 
+    scene_flow_gt = get_gt_scene_flow(flow_gt, depth1, depth2)
     n_predictions = len(motion_preds)    
     flow_loss = 0.0
+
+    inv_depth1 = 1./(depth1 + 1e-5)
+    inv_depth2 = 1./(depth2 + 1e-5)
 
     # exlude invalid pixels and extremely large diplacements
     mag = torch.sum(flow_gt**2, dim=1).sqrt()
@@ -61,14 +138,16 @@ def sequence_loss(motion_preds, flow_gt, valid, depth1, depth2, pix_T_camXs, gam
 
     for i in range(n_predictions):
         i_weight = gamma**(n_predictions - i - 1)
-        flow_pred_i, coords1_i = pydisco_utils.get_flow_field(depth1, motion_preds[i], pix_T_camXs)
+        flow_pred_i, coords1_i, d_dash_i = pydisco_utils.get_flow_field(depth1, motion_preds[i].permute(0,2,3,1), pix_T_camXs)
+        inv_depth_change = d_dash_i - (1./(depth1 + 1e-5))
         flow_pred_i = flow_pred_i.permute(0,3,1,2)
-        d_dash_bar = pydisco_utils.grid_sample(depth2, coords1_i)
-        i_loss = (flow_pred_i - flow_gt).abs()
+        scene_flow_pred_i = torch.cat([flow_pred_i, inv_depth_change], dim=1)
+
+        i_loss = (scene_flow_pred_i - scene_flow_gt).abs()
         flow_loss += i_weight * (valid[:, None] * i_loss).mean()
 
 
-    epe = torch.sum((flow_pred_i - flow_gt)**2, dim=1).sqrt()
+    epe = torch.sum((scene_flow_pred_i[:,:2] - scene_flow_gt[:,:2])**2, dim=1).sqrt()
     epe = epe.view(-1)[valid.view(-1)]
 
     metrics = {
@@ -76,10 +155,12 @@ def sequence_loss(motion_preds, flow_gt, valid, depth1, depth2, pix_T_camXs, gam
         '1px': (epe < 1).float().mean().item(),
         '3px': (epe < 3).float().mean().item(),
         '5px': (epe < 5).float().mean().item(),
+        'loss': flow_loss.item()
     }
     print("flow loss: ", flow_loss)
 
     return flow_loss, metrics
+
 
 
 def count_parameters(model):
@@ -118,6 +199,19 @@ class Logger:
         for k in self.running_loss:
             self.writer.add_scalar(k, self.running_loss[k]/SUM_FREQ, self.total_steps)
             self.running_loss[k] = 0.0
+
+    # flow -> BHWC
+    def push_flow(self, name, flow):
+        flow_rgb_vis = flow_vis.flow_to_color(flow[0].cpu().detach().numpy(), convert_to_bgr=False)*1.0
+        flow_rgb_vis = torch.tensor(flow_rgb_vis).unsqueeze(0)
+        self.push_rgb(name, flow_rgb_vis.permute(0,3,1,2))
+
+    def push_rgb(self, name, rgb):
+
+        if self.total_steps % SUM_FREQ == SUM_FREQ-1:
+            if self.writer is None:
+                self.writer = SummaryWriter()
+            self.writer.add_image(name, rgb[0]/255., self.total_steps)
 
     def push(self, metrics):
         self.total_steps += 1
@@ -178,7 +272,7 @@ def train(args):
             pix_T_camXs = pydisco_utils.get_pix_T_camX(args.stage, image1.shape[0])
             depth1 = pydisco_utils.disp2depth(torch.ones(B).cuda(), pix_T_camXs[:,0,0], disp1)
             depth2 = pydisco_utils.disp2depth(torch.tensor(B).cuda(), pix_T_camXs[:,0,0], disp2)
-            
+
             image1, image2, depth1, depth2, flow, valid, pix_T_camXs = rescale_stuff(image1, image2, depth1, depth2, flow, valid, pix_T_camXs)
 
             print("Training: ", i_batch)
@@ -193,7 +287,12 @@ def train(args):
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)                
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-            
+            vis, flow_pred = visualize_flow(motion_predictions[-1], image1, image2, depth1, pix_T_camXs)
+
+            logger.push_rgb("flow result", vis)
+            logger.push_flow("flow_pred_visualization", flow_pred)
+            logger.push_flow("flow_gt_visualization", flow.permute(0,2,3,1))
+
             scaler.step(optimizer)
             scheduler.step()
             scaler.update()
@@ -233,18 +332,20 @@ def train(args):
 
 def rescale_stuff(img1, img2, depth1, depth2, flow, valid, pix_T_camX):
     
-    sy = 400.0/img1.shape[2]
-    sx = 720.0/img1.shape[3]
-    img1 = F.interpolate(img1, (400, 720), mode="bilinear")
-    img2 = F.interpolate(img2, (400, 720), mode="bilinear")
-    depth1 = F.interpolate(depth1, (400, 720), mode="nearest")
-    depth2 = F.interpolate(depth2, (400, 720), mode="nearest")
-    flow = F.interpolate(flow, (400, 720), mode="bilinear")
+    finalH, finalW = 320, 720
+    sy = finalH/img1.shape[2]
+    sx = finalW/img1.shape[3]
+    img1 = F.interpolate(img1, (finalH, finalW), mode="bilinear")
+    img2 = F.interpolate(img2, (finalH, finalW), mode="bilinear")
+    depth1 = F.interpolate(depth1, (finalH, finalW), mode="nearest")
+    depth2 = F.interpolate(depth2, (finalH, finalW), mode="nearest")
+    flow = F.interpolate(flow, (finalH, finalW), mode="bilinear")
     flow = flow * torch.tensor([sx, sy]).reshape(1,2,1,1).to(flow.device)
 
     valid = (flow[0].abs() < 1000) & (flow[1].abs() < 1000)
     pix_T_camX = pydisco_utils.scale_intrinsics(pix_T_camX, sx, sy)
     return img1, img2, depth1, depth2, flow, valid, pix_T_camX
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -255,6 +356,7 @@ if __name__ == '__main__':
     parser.add_argument('--validation', type=str, nargs='+')
 
     parser.add_argument('--lr', type=float, default=0.00002)
+    # parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--batch_size', type=int, default=6)
     parser.add_argument('--image_size', type=int, nargs='+', default=[384, 512])

@@ -184,17 +184,41 @@ def apply_pix_T_cam(pix_T_cam, xyz):
     xy = torch.stack([x, y], axis=-1)
     return xy
 
-def get_flow_field(depth, translation, pix_T_camX):
-    # TODO: after baseline, change translation to T
+# def get_flow_field(depth, translation, pix_T_camX):
+#     # TODO: after baseline, change translation to T
+#     B, _, H, W = depth.shape
+#     xyz_camXS = depth2pointcloud(depth, pix_T_camX)
+#     proj_xyS = apply_pix_T_cam(pix_T_camX, xyz_camXS)
+
+#     xyz_camXT = xyz_camXS + translation.reshape(B, H*W, 3)
+#     proj_xyT = apply_pix_T_cam(pix_T_camX, xyz_camXT)
+#     flow_field = proj_xyT - proj_xyS
+
+#     return flow_field.reshape(B,H,W,-1), proj_xyT.reshape(B,H,W,-1)
+
+def get_flow_field(depth, Tmat, pix_T_camX):
+
     B, _, H, W = depth.shape
+    rotations = eye_3x3(B*H*W)
+    Tmat = Tmat.reshape(B*H*W, -1)
+    Tmat = merge_rt(rotations, Tmat).reshape(B,H,W,4,4)
+
     xyz_camXS = depth2pointcloud(depth, pix_T_camX)
     proj_xyS = apply_pix_T_cam(pix_T_camX, xyz_camXS)
+    
+    B, N, _= xyz_camXS.shape
+    xyz_camXS_ = xyz_camXS.reshape(B*N, 1, 3)
+    Tmat_ = Tmat.reshape(B*H*W, 4, 4)
+    xyz_camXT_ = apply_4x4(Tmat_, xyz_camXS_)
+    xyz_camXT = xyz_camXT_.reshape(B, N, 3)
 
-    xyz_camXT = xyz_camXS + translation.reshape(B, H*W, 3)
+    depth_camXT = xyz_camXT[:,:,2].reshape(B,1,H,W)
+    inv_depth_camXT = 1./(depth_camXT + 1e-5)
+
     proj_xyT = apply_pix_T_cam(pix_T_camX, xyz_camXT)
     flow_field = proj_xyT - proj_xyS
 
-    return flow_field.reshape(B,H,W,-1), proj_xyT.reshape(B,H,W,-1)
+    return flow_field.reshape(B,H,W,-1), proj_xyT.reshape(B,H,W,-1), inv_depth_camXT
 
     
 def create_depth_image_single(xy, z, H, W):
@@ -214,7 +238,7 @@ def create_depth_image_single(xy, z, H, W):
     inds = sub2ind(H, W, xy[:,1], xy[:,0]).long()
     depth[inds] = z
     valid = (depth > 0.0).float()
-    depth[torch.where(depth == 0.0)] = 100.0
+    depth[torch.where(depth == 0.0)] = 1000.0
     depth = torch.reshape(depth, [1, H, W])
     valid = torch.reshape(valid, [1, H, W])
     return depth, valid
@@ -251,6 +275,10 @@ def merge_rt(r, t):
 
 def eye_4x4(B):
     rt = torch.eye(4, device=device).view(1,4,4).repeat([B, 1, 1])
+    return rt
+
+def eye_3x3(B):
+    rt = torch.eye(3, device=device).view(1,3,3).repeat([B, 1, 1])
     return rt
 
 def grid_sample(input, grid, isnormalized=False):
