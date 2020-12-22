@@ -147,6 +147,7 @@ class RAFT(nn.Module):
         motion_predictions = []
 
         for itr in range(iters):
+            print("Processing iter: ", itr)
             flow, coords1, d_dash = pydisco_utils.get_flow_field(depth1, Tmat, pix_T_camXs)
             d_dash_bar = pydisco_utils.grid_sample(inv_depth2, coords1)
             redidual_depth = d_dash - d_dash_bar 

@@ -1,7 +1,7 @@
 import torch 
 import numpy as np 
 import matplotlib.pyplot as plt
-import pytorch3d
+# import pytorch3d
 import ipdb 
 st = ipdb.set_trace 
 from liegroups.torch import SE3, SO3, utils

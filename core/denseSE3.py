@@ -10,7 +10,8 @@ class DenseSE3(nn.Module):
     def __init__(self):
         super(DenseSE3, self).__init__()
 
-    def calculate_affinity(self, embeddings):
+    @staticmethod
+    def calculate_affinity(embeddings):
 
         B, C, H, W = embeddings.shape
         embeddings = embeddings.reshape(B, C, H*W).permute(0, 2, 1)
@@ -58,7 +59,7 @@ class DenseSE3(nn.Module):
         return out.reshape(B, N, 3, 6)
 
     def forward(self, embeddings, revisions, weights, depth, pix_T_camXs, Tmat):
-        affinity = self.calculate_affinity(embeddings)
+        affinity = DenseSE3.calculate_affinity(embeddings)
         B, _, H, W = depth.shape
         affinity = affinity.reshape(affinity.shape[0], H, W, -1)
         xyz_camX = pydisco_utils.depth2pointcloud(depth, pix_T_camXs)
@@ -68,8 +69,8 @@ class DenseSE3(nn.Module):
 
             pix_T_camXs_b = pix_T_camXs[b:b+1]
             weights_b = weights[b:b+1]
-            for i in range(embeddings.shape[1]):
-                for j in range(embeddings.shape[2]):
+            for i in range(H):
+                for j in range(W):
                     
                     T_i = Tmat[b:b+1, i, j]
                     T_j = Tmat[b].reshape(-1, 4, 4)
