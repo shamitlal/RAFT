@@ -46,7 +46,7 @@ except:
 
 # exclude extremly large displacements
 MAX_FLOW = 400
-SUM_FREQ = 1
+SUM_FREQ = 50
 VAL_FREQ = 5000
 
 def get_gt_scene_flow(flow_gt, depth1, depth2):
@@ -114,8 +114,8 @@ def visualize_flow(motion_pred, image1, image2, depth1, pix_T_camXs):
     grid = torch.stack([xcoords, ycoords]).unsqueeze(0).repeat(B, 1, 1, 1)
     grid = grid.permute(0,2,3,1)
     grid_flowed = grid + flow_pred_i
-    grid_flowed[:,:,:,0] = torch.clip(grid_flowed[:,:,:,0], 0, W-1)
-    grid_flowed[:,:,:,1] = torch.clip(grid_flowed[:,:,:,1], 0, H-1)
+    grid_flowed[:,:,:,0] = torch.clamp(grid_flowed[:,:,:,0], 0, W-1)
+    grid_flowed[:,:,:,1] = torch.clamp(grid_flowed[:,:,:,1], 0, H-1)
     grid_flowed = grid_flowed.long()
     grid = grid.long()
     out[0, :, grid_flowed[:,:,:,1], grid_flowed[:,:,:,0]] = image1[0, :, grid[:,:,:,1], grid[:,:,:,0]]
@@ -134,6 +134,7 @@ def sequence_loss(motion_preds, flow_gt, valid, depth1, depth2, pix_T_camXs, gam
 
     # exlude invalid pixels and extremely large diplacements
     mag = torch.sum(flow_gt**2, dim=1).sqrt()
+    # st()
     valid = (valid >= 0.5) & (mag < max_flow)
 
     for i in range(n_predictions):
@@ -202,6 +203,7 @@ class Logger:
 
     # flow -> BHWC
     def push_flow(self, name, flow):
+        flow = torch.clamp(flow, 0)
         flow_rgb_vis = flow_vis.flow_to_color(flow[0].cpu().detach().numpy(), convert_to_bgr=False)*1.0
         flow_rgb_vis = torch.tensor(flow_rgb_vis).unsqueeze(0)
         self.push_rgb(name, flow_rgb_vis.permute(0,3,1,2))
@@ -331,7 +333,7 @@ def train(args):
     return PATH
 
 def rescale_stuff(img1, img2, depth1, depth2, flow, valid, pix_T_camX):
-    
+
     finalH, finalW = 320, 720
     sy = finalH/img1.shape[2]
     sx = finalW/img1.shape[3]
@@ -342,7 +344,7 @@ def rescale_stuff(img1, img2, depth1, depth2, flow, valid, pix_T_camX):
     flow = F.interpolate(flow, (finalH, finalW), mode="bilinear")
     flow = flow * torch.tensor([sx, sy]).reshape(1,2,1,1).to(flow.device)
 
-    valid = (flow[0].abs() < 1000) & (flow[1].abs() < 1000)
+    valid = (flow[:, 0].abs() < 1000) & (flow[:, 1].abs() < 1000)
     pix_T_camX = pydisco_utils.scale_intrinsics(pix_T_camX, sx, sy)
     return img1, img2, depth1, depth2, flow, valid, pix_T_camX
 
@@ -355,8 +357,8 @@ if __name__ == '__main__':
     parser.add_argument('--small', action='store_true', help='use small model')
     parser.add_argument('--validation', type=str, nargs='+')
 
-    parser.add_argument('--lr', type=float, default=0.00002)
-    # parser.add_argument('--lr', type=float, default=0.0001)
+    # parser.add_argument('--lr', type=float, default=0.00002)
+    parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--batch_size', type=int, default=6)
     parser.add_argument('--image_size', type=int, nargs='+', default=[384, 512])

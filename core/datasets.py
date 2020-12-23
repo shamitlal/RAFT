@@ -167,21 +167,25 @@ class FlyingThings3D(FlowDataset):
                             [0.0, 1050.0, 269.5, 0],
                             [0.0, 0.0, 1.0, 0.0],
                             [0.0, 0.0, 0.0, 1.0]])
+
+        # print("here finally")
         for cam in ['left']:
             for direction in ['into_future', 'into_past']:
                 image_dirs = sorted(glob(osp.join(root, dstype, 'TRAIN/*/*')))
                 image_dirs = sorted([osp.join(f, cam) for f in image_dirs])
 
-                disp_dirs = sorted(glob(osp.join(root, f"depth_{dstype.split('_')[1]}", 'TRAIN/*/*')))
-                disp_dirs = sorted([osp.join(f, "disparity") for f in disp_dirs])
+                # disp_dirs = sorted(glob(osp.join(root, f"depth_{dstype.split('_')[1]}", 'TRAIN/*/*')))
+                disp_dirs = sorted(glob(osp.join(root, "disparity", 'TRAIN/*/*')))
+                disp_dirs = sorted([osp.join(f, cam) for f in disp_dirs])
                 
                 flow_dirs = sorted(glob(osp.join(root, 'optical_flow/TRAIN/*/*')))
                 flow_dirs = sorted([osp.join(f, direction, cam) for f in flow_dirs])
-               
+                # st()
                 for idir, fdir, ddir in zip(image_dirs, flow_dirs, disp_dirs):
                     images = sorted(glob(osp.join(idir, '*.png')) )
                     flows = sorted(glob(osp.join(fdir, '*.pfm')) )
                     disparities = sorted(glob(osp.join(ddir, '*.pfm')) )
+                    # st()
                     for i in range(len(flows)-1):
                         if direction == 'into_future':
                             self.disparity_list += [ [disparities[i], disparities[i+1]] ]
@@ -191,6 +195,8 @@ class FlyingThings3D(FlowDataset):
                             self.disparity_list += [ [disparities[i+1], disparities[i]] ]
                             self.image_list += [ [images[i+1], images[i]] ]
                             self.flow_list += [ flows[i+1] ]
+
+        print("Length of list: ", len(self.flow_list))
       
 
 class KITTI(FlowDataset):
@@ -263,7 +269,7 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         train_dataset = KITTI(aug_params, split='training')
 
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, 
-        pin_memory=False, shuffle=True, num_workers=0, drop_last=True)
+        pin_memory=False, shuffle=True, num_workers=4, drop_last=True)
 
     print('Training with %d image pairs' % len(train_dataset))
     return train_loader
