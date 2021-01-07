@@ -157,6 +157,8 @@ class FlyingThings3D(FlowDataset):
                             self.image_list += [ [images[i+1], images[i]] ]
                             self.flow_list += [ flows[i+1] ]
       
+        print("Length of flow list: ", len(self.flow_list))
+        print("Length of img list: ", len(self.image_list))
 
 class KITTI(FlowDataset):
     def __init__(self, aug_params=None, split='training', root='datasets/KITTI'):

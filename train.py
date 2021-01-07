@@ -40,7 +40,7 @@ except:
 
 # exclude extremly large displacements
 MAX_FLOW = 400
-SUM_FREQ = 100
+SUM_FREQ = 50
 VAL_FREQ = 5000
 
 
@@ -67,6 +67,8 @@ def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
         '1px': (epe < 1).float().mean().item(),
         '3px': (epe < 3).float().mean().item(),
         '5px': (epe < 5).float().mean().item(),
+        '10px': (epe < 10).float().mean().item(),
+        '30px': (epe < 30).float().mean().item(),
     }
 
     return flow_loss, metrics
@@ -108,6 +110,18 @@ class Logger:
         for k in self.running_loss:
             self.writer.add_scalar(k, self.running_loss[k]/SUM_FREQ, self.total_steps)
             self.running_loss[k] = 0.0
+
+    def push_gradients(self, named_params):
+        if self.total_steps % SUM_FREQ == SUM_FREQ-1:
+            if self.writer is None:
+                self.writer = SummaryWriter()
+            # st()
+            for n, p in named_params:
+                if p.requires_grad and 'bias' not in n and p.grad!=None and not torch.isnan(p.grad.mean()):
+                    print("name, gradmean, steps: ", n, p.grad.abs().mean(), self.total_steps)
+                    self.writer.add_histogram("grads/"+n+"_hist", p.grad.reshape(-1), self.total_steps) 
+                    self.writer.add_scalar("grads/"+n+"_scal", p.grad.abs().mean(), self.total_steps) 
+
 
     def push(self, metrics):
         self.total_steps += 1
@@ -181,6 +195,7 @@ def train(args):
             scaler.update()
 
             logger.push(metrics)
+            logger.push_gradients(model.named_parameters())
 
             if total_steps % VAL_FREQ == VAL_FREQ - 1:
                 PATH = 'checkpoints/%d_%s.pth' % (total_steps+1, args.name)

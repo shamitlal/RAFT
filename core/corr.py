@@ -8,6 +8,8 @@ except:
     # alt_cuda_corr is not compiled
     pass
 
+import ipdb 
+st = ipdb.set_trace
 
 class CorrBlock:
     def __init__(self, fmap1, fmap2, num_levels=4, radius=4):
