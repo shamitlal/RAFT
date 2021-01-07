@@ -1,2 +1,1 @@
-Dec23_04-41-30_matrix-1-14.eth -> lr = 0.00002
-Dec23_04-50-32_matrix-1-14.eth -> lr = 0.0001
+Jan06_04-40-28_matrix-1-14.eth

@@ -165,8 +165,10 @@ class BasicUpdateBlock(nn.Module):
 
         revisions = self.revisionsnet(net)
 
-        weights = self.weightsnet(net)
-        embeddings = self.embeddingnet(net)
+        weights = None 
+        embeddings = None
+        # weights = self.weightsnet(net)
+        # embeddings = self.embeddingnet(net)
 
         mask = .25 * self.mask(net)
         return net, revisions, weights, embeddings, mask

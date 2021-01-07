@@ -156,10 +156,15 @@ def sequence_loss(motion_preds, flow_gt, valid, depth1, depth2, pix_T_camXs, gam
         '1px': (epe < 1).float().mean().item(),
         '3px': (epe < 3).float().mean().item(),
         '5px': (epe < 5).float().mean().item(),
+        '10px': (epe < 10).float().mean().item(),
+        '30px': (epe < 30).float().mean().item(),
         'loss': flow_loss.item()
     }
     print("flow loss: ", flow_loss)
 
+    if torch.isnan(flow_loss):
+        st()
+        aa=1
     return flow_loss, metrics
 
 
@@ -172,9 +177,13 @@ def fetch_optimizer(args, model):
     """ Create the optimizer and learning rate scheduler """
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wdecay, eps=args.epsilon)
 
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, args.num_steps+100,
-        pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
+    # scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, args.num_steps+100,
+    #     pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
+    
+    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, args.num_steps, pct_start=0.001, cycle_momentum=False)
 
+    
+    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5000, gamma=0.5)
     return optimizer, scheduler
     
 
@@ -192,7 +201,7 @@ class Logger:
         metrics_str = ("{:10.4f}, "*len(metrics_data)).format(*metrics_data)
         
         # print the training status
-        print(training_str + metrics_str)
+        print("final: ", training_str + metrics_str)
 
         if self.writer is None:
             self.writer = SummaryWriter()
@@ -201,12 +210,36 @@ class Logger:
             self.writer.add_scalar(k, self.running_loss[k]/SUM_FREQ, self.total_steps)
             self.running_loss[k] = 0.0
 
+    def push_gradients(self, named_params):
+        if self.total_steps % SUM_FREQ == SUM_FREQ-1:
+            if self.writer is None:
+                self.writer = SummaryWriter()
+            # st()
+            for n, p in named_params:
+                if p.requires_grad and 'bias' not in n and p.grad!=None and not torch.isnan(p.grad.mean()):
+                    print("name, gradmean, steps: ", n, p.grad.abs().mean(), self.total_steps)
+                    self.writer.add_histogram("grads/"+n+"_hist", p.grad.reshape(-1), self.total_steps) 
+                    self.writer.add_scalar("grads/"+n+"_scal", p.grad.abs().mean(), self.total_steps) 
+
+    def push_dict(self, out_dict):
+        if self.total_steps % SUM_FREQ == SUM_FREQ-1:
+            if self.writer is None:
+                self.writer = SummaryWriter()
+
+            for n,p in out_dict.items():
+                self.writer.add_scalar("outputs/"+n+"_scal", p.abs().mean(), self.total_steps) 
+                self.writer.add_histogram("outputs/"+n+"_hist", p.reshape(-1), self.total_steps) 
+
+
     # flow -> BHWC
     def push_flow(self, name, flow):
         flow = torch.clamp(flow, 0)
-        flow_rgb_vis = flow_vis.flow_to_color(flow[0].cpu().detach().numpy(), convert_to_bgr=False)*1.0
-        flow_rgb_vis = torch.tensor(flow_rgb_vis).unsqueeze(0)
-        self.push_rgb(name, flow_rgb_vis.permute(0,3,1,2))
+        try:
+            flow_rgb_vis = flow_vis.flow_to_color(flow[0].cpu().detach().numpy(), convert_to_bgr=False)*1.0
+            flow_rgb_vis = torch.tensor(flow_rgb_vis).unsqueeze(0)
+            self.push_rgb(name, flow_rgb_vis.permute(0,3,1,2))
+        except Exception as e:
+            pass
 
     def push_rgb(self, name, rgb):
 
@@ -283,23 +316,35 @@ def train(args):
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
             
-            motion_predictions = model(image1, image2, depth1, depth2, pix_T_camXs, iters=args.iters)            
+            motion_predictions, return_dict = model(image1, image2, depth1, depth2, pix_T_camXs, iters=args.iters)            
 
             loss, metrics = sequence_loss(motion_predictions, flow, valid, depth1, depth2, pix_T_camXs, args.gamma)
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)                
+            if args.use_scaler:
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+            else:
+                loss.backward()     
+            
+            # for n,p in model.named_parameters():
+            #     if p.grad != None:
+            #         print("name, mean: ", n, p.grad.mean())
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+            
             vis, flow_pred = visualize_flow(motion_predictions[-1], image1, image2, depth1, pix_T_camXs)
 
+            if args.use_scaler:
+                scaler.step(optimizer)
+            scheduler.step()
+
+            if args.use_scaler:
+                scaler.update()
+
+            logger.push(metrics)
             logger.push_rgb("flow result", vis)
             logger.push_flow("flow_pred_visualization", flow_pred)
             logger.push_flow("flow_gt_visualization", flow.permute(0,2,3,1))
-
-            scaler.step(optimizer)
-            scheduler.step()
-            scaler.update()
-
-            logger.push(metrics)
+            logger.push_gradients(model.named_parameters())
+            logger.push_dict(return_dict)
 
             if total_steps % VAL_FREQ == VAL_FREQ - 1:
                 PATH = 'checkpoints/%d_%s.pth' % (total_steps+1, args.name)
@@ -321,7 +366,7 @@ def train(args):
                     model.module.freeze_bn()
             
             total_steps += 1
-
+            print(f"Current steps: {total_steps}, Final Steps: {args.num_steps}")
             if total_steps > args.num_steps:
                 should_keep_training = False
                 break
@@ -344,7 +389,7 @@ def rescale_stuff(img1, img2, depth1, depth2, flow, valid, pix_T_camX):
     flow = F.interpolate(flow, (finalH, finalW), mode="bilinear")
     flow = flow * torch.tensor([sx, sy]).reshape(1,2,1,1).to(flow.device)
 
-    valid = (flow[:, 0].abs() < 1000) & (flow[:, 1].abs() < 1000)
+    valid = (flow[:, 0].abs() < 720) & (flow[:, 1].abs() < 720)
     pix_T_camX = pydisco_utils.scale_intrinsics(pix_T_camX, sx, sy)
     return img1, img2, depth1, depth2, flow, valid, pix_T_camX
 
@@ -364,19 +409,24 @@ if __name__ == '__main__':
     parser.add_argument('--image_size', type=int, nargs='+', default=[384, 512])
     parser.add_argument('--gpus', type=int, nargs='+', default=[0,1])
     parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
+    parser.add_argument('--pred_inv_depth', action='store_true', help='pred inv depth')
+    parser.add_argument('--sample_depth', action='store_true', help='sample_depth')
+    
 
     parser.add_argument('--iters', type=int, default=12)
     parser.add_argument('--wdecay', type=float, default=.00005)
     parser.add_argument('--epsilon', type=float, default=1e-8)
     parser.add_argument('--clip', type=float, default=1.0)
+    # parser.add_argument('--clip', type=float, default=0.25)
     parser.add_argument('--dropout', type=float, default=0.0)
     parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
     parser.add_argument('--add_noise', action='store_true')
+    parser.add_argument('--use_scaler', action='store_true')
     args = parser.parse_args()
 
     torch.manual_seed(1234)
     np.random.seed(1234)
-
+    # st()
     if not os.path.isdir('checkpoints'):
         os.mkdir('checkpoints')
 

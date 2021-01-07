@@ -28,6 +28,7 @@ class FlowDataset(data.Dataset):
             else:
                 self.augmentor = FlowAugmentor(**aug_params)
 
+        self.augmentor = None
         self.is_test = False
         self.init_seed = False
         self.flow_list = []
@@ -36,7 +37,10 @@ class FlowDataset(data.Dataset):
         self.extra_info = []
 
     def __getitem__(self, index):
-
+        # index = index % 100 # operate on 5 datapoints for now.
+        # if index in [108, 855, 16335]:
+        #     index += 1
+        # print("index=", index)
         if self.is_test:
             img1 = frame_utils.read_gen(self.image_list[index][0])
             img2 = frame_utils.read_gen(self.image_list[index][1])
@@ -60,15 +64,22 @@ class FlowDataset(data.Dataset):
                 np.random.seed(worker_info.id)
                 random.seed(worker_info.id)
                 self.init_seed = True
-
-        index = index % len(self.image_list)
-        valid = None
-        if self.sparse:
-            flow, valid = frame_utils.readFlowKITTI(self.flow_list[index])
-            # TODO: fix this for disparity, if its ever used.
-            st()
-        else:
-            flow = frame_utils.read_gen(self.flow_list[index])
+        
+        while True:
+            index = index % len(self.image_list)
+            valid = None
+            if self.sparse:
+                flow, valid = frame_utils.readFlowKITTI(self.flow_list[index])
+                # TODO: fix this for disparity, if its ever used.
+                st()
+            else:
+                flow = frame_utils.read_gen(self.flow_list[index])
+            flow = np.array(flow).astype(np.float32)
+            if np.isnan(flow.max()):
+                print(f"Index {index} is nan")
+                index = index + 1
+            else:
+                break
         
         img1 = frame_utils.read_gen(self.image_list[index][0])
         img2 = frame_utils.read_gen(self.image_list[index][1])
@@ -76,12 +87,14 @@ class FlowDataset(data.Dataset):
         disp1 = frame_utils.read_gen(self.disparity_list[index][0])
         disp2 = frame_utils.read_gen(self.disparity_list[index][1])
 
-        flow = np.array(flow).astype(np.float32)
+        
         img1 = np.array(img1).astype(np.uint8)
         img2 = np.array(img2).astype(np.uint8)
 
         disp1 = np.array(disp1)
         disp2 = np.array(disp2)
+
+        
         
         # grayscale images
         if len(img1.shape) == 2:
@@ -101,6 +114,9 @@ class FlowDataset(data.Dataset):
         img2 = torch.from_numpy(img2).permute(2, 0, 1).float()
         flow = torch.from_numpy(flow).permute(2, 0, 1).float()
 
+        if index == 108:
+            st()
+            aa=1
         disp1 = torch.from_numpy(disp1).float()
         disp2 = torch.from_numpy(disp2).float()
 

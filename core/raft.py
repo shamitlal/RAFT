@@ -93,14 +93,19 @@ class RAFT(nn.Module):
     def forward(self, image1, image2, depth1_fullres, depth2_fullres, pix_T_camXs_fullres, iters=12, flow_init=None, upsample=True, test_mode=False):
         """ Estimate optical flow between pair of frames """
 
+        return_dict = {}
         image1 = 2 * (image1 / 255.0) - 1.0
         image2 = 2 * (image2 / 255.0) - 1.0
 
         image1 = image1.contiguous()
         image2 = image2.contiguous()
-
-        depth1 = F.interpolate(depth1_fullres, scale_factor=1./8, mode="nearest")
-        depth2 = F.interpolate(depth2_fullres, scale_factor=1./8, mode="nearest")
+        
+        if self.args.sample_depth:
+            depth1 = depth1_fullres[:,:,3::8, 3::8]
+            depth2 = depth2_fullres[:,:,3::8, 3::8]
+        else:
+            depth1 = F.interpolate(depth1_fullres, scale_factor=1./8, mode="nearest")
+            depth2 = F.interpolate(depth2_fullres, scale_factor=1./8, mode="nearest")
 
         inv_depth1 = 1./(depth1 + 1e-5)
         inv_depth2 = 1./(depth2 + 1e-5)
@@ -113,9 +118,13 @@ class RAFT(nn.Module):
         # run the feature network
         with autocast(enabled=self.args.mixed_precision):
             fmap1, fmap2 = self.fnet([image1, image2])
+            
         
         fmap1 = fmap1.float()
         fmap2 = fmap2.float()
+
+        return_dict['fmap1'] = fmap1.detach().clone()
+        return_dict['fmap2'] = fmap2.detach().clone()
         if self.args.alternate_corr:
             corr_fn = AlternateCorrBlock(fmap1, fmap2, radius=self.args.corr_radius)
         else:
@@ -124,12 +133,14 @@ class RAFT(nn.Module):
         # run the context network
         with autocast(enabled=self.args.mixed_precision):
             cnet = self.cnet(image1)
+            return_dict['cnet'] = cnet.detach().clone()
             net, inp = torch.split(cnet, [hdim, cdim], dim=1)
             net = torch.tanh(net)
             inp = torch.relu(inp)
 
         # coords0, coords1 = self.initialize_flow(image1)
         translations = self.initialize_translation(image1)
+        # The translation takes us from frameS to frameT. frameT_T_frameS
 
 
         # if flow_init is not None:
@@ -138,6 +149,7 @@ class RAFT(nn.Module):
         motion_predictions = []
 
         for itr in range(iters):
+            translations = translations.detach()
             flow, coords1, d_dash = pydisco_utils.get_flow_field(depth1, translations, pix_T_camXs)
             d_dash_bar = pydisco_utils.grid_sample(inv_depth2, coords1)
             redidual_depth = d_dash - d_dash_bar 
@@ -146,15 +158,25 @@ class RAFT(nn.Module):
             # flow = flow.detach()
             corr = corr_fn(coords1) # index correlation volume
 
+            translations_updateblock = translations.clone()
+            if self.args.pred_inv_depth:
+                translations_updateblock[:,:,:,2] = 1./(translations_updateblock[:,:,:,2] + 1e-4)
+
+
             # flow = coords1 - coords0
             with autocast(enabled=self.args.mixed_precision):
                 # send translations instead of twist for now.
                 # net, up_mask, delta_flow = self.update_block(net, inp, corr, flow, redidual_depth, translations)
-                net, revisions, weights, embeddings, up_mask = self.update_block(net, inp, corr, flow, redidual_depth, translations)
+                net, revisions, weights, embeddings, up_mask = self.update_block(net, inp, corr, flow, redidual_depth, translations_updateblock)
+                return_dict[f'net_{itr}'] = net.detach().clone()
+                return_dict[f'revisions_{itr}'] = revisions.detach().clone()
+                return_dict[f'up_mask_{itr}'] = up_mask.detach().clone()
+            # st()
+            if self.args.pred_inv_depth:
+                revisions[:, 2] = 1./(revisions[:, 2] + 1e-4)
 
             translations = translations + revisions.permute(0,2,3,1)
             # coords1 = coords1 + delta_flow
-            
             translations_up = self.upsample_flow(translations.permute(0,3,1,2), up_mask)
             
             motion_predictions.append(translations_up)
@@ -162,4 +184,4 @@ class RAFT(nn.Module):
         if test_mode:
             return translations, translations_up
             
-        return motion_predictions
+        return motion_predictions, return_dict
