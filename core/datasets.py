@@ -14,6 +14,8 @@ import os.path as osp
 from utils import frame_utils
 from utils.augmentor import FlowAugmentor, SparseFlowAugmentor
 
+import ipdb 
+st = ipdb.set_trace
 
 class FlowDataset(data.Dataset):
     def __init__(self, aug_params=None, sparse=False):
@@ -25,11 +27,13 @@ class FlowDataset(data.Dataset):
             else:
                 self.augmentor = FlowAugmentor(**aug_params)
 
+        self.augmentor = None
         self.is_test = False
         self.init_seed = False
         self.flow_list = []
         self.image_list = []
         self.extra_info = []
+        self.disparity_list = []
 
     def __getitem__(self, index):
 
@@ -50,19 +54,34 @@ class FlowDataset(data.Dataset):
                 random.seed(worker_info.id)
                 self.init_seed = True
 
-        index = index % len(self.image_list)
-        valid = None
-        if self.sparse:
-            flow, valid = frame_utils.readFlowKITTI(self.flow_list[index])
-        else:
-            flow = frame_utils.read_gen(self.flow_list[index])
+        while True:
+            index = index % len(self.image_list)
+            valid = None
+            if self.sparse:
+                flow, valid = frame_utils.readFlowKITTI(self.flow_list[index])
+                # TODO: fix this for disparity, if its ever used.
+                st()
+            else:
+                flow = frame_utils.read_gen(self.flow_list[index])
+            flow = np.array(flow).astype(np.float32)
+            if np.isnan(flow.max()):
+                print(f"Index {index} is nan")
+                index = index + 1
+            else:
+                break
 
         img1 = frame_utils.read_gen(self.image_list[index][0])
         img2 = frame_utils.read_gen(self.image_list[index][1])
 
+        disp1 = frame_utils.read_gen(self.disparity_list[index][0])
+        disp2 = frame_utils.read_gen(self.disparity_list[index][1])
+
         flow = np.array(flow).astype(np.float32)
         img1 = np.array(img1).astype(np.uint8)
         img2 = np.array(img2).astype(np.uint8)
+
+        disp1 = np.array(disp1)
+        disp2 = np.array(disp2)
 
         # grayscale images
         if len(img1.shape) == 2:
@@ -87,7 +106,7 @@ class FlowDataset(data.Dataset):
         else:
             valid = (flow[0].abs() < 1000) & (flow[1].abs() < 1000)
 
-        return img1, img2, flow, valid.float()
+        return img1, img2, disp1, disp2, flow, valid.float()
 
 
     def __rmul__(self, v):
@@ -138,27 +157,38 @@ class FlyingThings3D(FlowDataset):
     def __init__(self, aug_params=None, root='datasets/FlyingThings3D', dstype='frames_cleanpass'):
         super(FlyingThings3D, self).__init__(aug_params)
 
+        self.pix_T_camXs =  np.array([[1050.0, 0.0, 479.5, 0],
+                            [0.0, 1050.0, 269.5, 0],
+                            [0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0]])
         for cam in ['left']:
             for direction in ['into_future', 'into_past']:
                 image_dirs = sorted(glob(osp.join(root, dstype, 'TRAIN/*/*')))
                 image_dirs = sorted([osp.join(f, cam) for f in image_dirs])
 
+                disp_dirs = sorted(glob(osp.join(root, "disparity", 'TRAIN/*/*')))
+                disp_dirs = sorted([osp.join(f, cam) for f in disp_dirs])
+
                 flow_dirs = sorted(glob(osp.join(root, 'optical_flow/TRAIN/*/*')))
                 flow_dirs = sorted([osp.join(f, direction, cam) for f in flow_dirs])
 
-                for idir, fdir in zip(image_dirs, flow_dirs):
+                for idir, fdir, ddir in zip(image_dirs, flow_dirs, disp_dirs):
                     images = sorted(glob(osp.join(idir, '*.png')) )
                     flows = sorted(glob(osp.join(fdir, '*.pfm')) )
+                    disparities = sorted(glob(osp.join(ddir, '*.pfm')) )
                     for i in range(len(flows)-1):
                         if direction == 'into_future':
+                            self.disparity_list += [ [disparities[i], disparities[i+1]] ]
                             self.image_list += [ [images[i], images[i+1]] ]
                             self.flow_list += [ flows[i] ]
                         elif direction == 'into_past':
+                            self.disparity_list += [ [disparities[i+1], disparities[i]] ]
                             self.image_list += [ [images[i+1], images[i]] ]
                             self.flow_list += [ flows[i+1] ]
       
         print("Length of flow list: ", len(self.flow_list))
         print("Length of img list: ", len(self.image_list))
+        print("Length of disp list: ", len(self.disparity_list))
 
 class KITTI(FlowDataset):
     def __init__(self, aug_params=None, split='training', root='datasets/KITTI'):
