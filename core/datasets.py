@@ -13,7 +13,8 @@ import os.path as osp
 
 from utils import frame_utils
 from utils.augmentor import FlowAugmentor, SparseFlowAugmentor
-
+import ipdb 
+st = ipdb.set_trace
 
 class FlowDataset(data.Dataset):
     def __init__(self, aug_params=None, sparse=False):
@@ -25,11 +26,27 @@ class FlowDataset(data.Dataset):
             else:
                 self.augmentor = FlowAugmentor(**aug_params)
 
+        self.augmentor = None
         self.is_test = False
         self.init_seed = False
         self.flow_list = []
         self.image_list = []
         self.extra_info = []
+
+    def rescale_stuff(self, img1_np, img2_np, flow_np):
+        sy = 400.0/540
+        sx = 720.0/960
+
+        img1 = torch.tensor(img1_np).unsqueeze(0).permute(0,3,1,2).float()
+        img2 = torch.tensor(img2_np).unsqueeze(0).permute(0,3,1,2).float()
+        flow = torch.tensor(flow_np).unsqueeze(0).permute(0,3,1,2).float()
+
+        img1 = F.interpolate(img1, size=(400, 720), mode="bilinear")
+        img2 = F.interpolate(img2, size=(400, 720), mode="bilinear")
+        flow = F.interpolate(flow, (400, 720), mode="bilinear")
+        flow = flow * torch.tensor([sx, sy]).reshape(1,2,1,1)
+
+        return img1.permute(0,2,3,1)[0].numpy(), img2.permute(0,2,3,1)[0].numpy(), flow.permute(0,2,3,1)[0].numpy()
 
     def __getitem__(self, index):
 
@@ -72,11 +89,14 @@ class FlowDataset(data.Dataset):
             img1 = img1[..., :3]
             img2 = img2[..., :3]
 
+        
         if self.augmentor is not None:
             if self.sparse:
                 img1, img2, flow, valid = self.augmentor(img1, img2, flow, valid)
             else:
                 img1, img2, flow = self.augmentor(img1, img2, flow)
+        else:
+            img1, img2, flow = self.rescale_stuff(img1, img2, flow)
 
         img1 = torch.from_numpy(img1).permute(2, 0, 1).float()
         img2 = torch.from_numpy(img2).permute(2, 0, 1).float()
@@ -230,7 +250,7 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         train_dataset = KITTI(aug_params, split='training')
 
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, 
-        pin_memory=False, shuffle=True, num_workers=4, drop_last=True)
+        pin_memory=False, shuffle=True, num_workers=0, drop_last=True)
 
     print('Training with %d image pairs' % len(train_dataset))
     return train_loader
