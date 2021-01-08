@@ -26,7 +26,7 @@ class FlowDataset(data.Dataset):
             else:
                 self.augmentor = FlowAugmentor(**aug_params)
 
-        self.augmentor = None
+        # self.augmentor = None
         self.is_test = False
         self.init_seed = False
         self.flow_list = []
