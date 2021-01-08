@@ -117,6 +117,9 @@ class BasicUpdateBlock(nn.Module):
         super(BasicUpdateBlock, self).__init__()
         self.args = args
         self.encoder = BasicMotionEncoder(args)
+        if self.args.concatenate_gru_feats:
+            self.conv1 = nn.Conv2d(384*3, 384, 3, padding=1)
+        
         self.gru = SepConvGRU(hidden_dim=hidden_dim, input_dim=128*3)
         # self.flow_head = FlowHead(hidden_dim, hidden_dim=256)
 
@@ -159,8 +162,11 @@ class BasicUpdateBlock(nn.Module):
         translation = translation.permute(0,3,1,2)
         motion_features = self.input_processor(torch.cat([flow, residual_depth, translation], dim=1))
         corr_features = self.corr_processor(corr)
-
-        input = inp + corr_features + motion_features
+        # st()
+        if self.args.concatenate_gru_feats:
+            input = self.conv1(torch.cat([inp, corr_features, motion_features], dim=1))
+        else:
+            input = inp + corr_features + motion_features
         net = self.gru(net, input)
 
         revisions = self.revisionsnet(net)
