@@ -34,6 +34,12 @@ class FlowDataset(data.Dataset):
         self.image_list = []
         self.extra_info = []
         self.disparity_list = []
+        self.image_list = []
+        self.depth_list = []
+        self.delta_list = []
+        self.pose_list = []
+        self.flow_list = []
+        self.intrinsics_list = []
 
     def __getitem__(self, index):
 
@@ -153,9 +159,89 @@ class FlyingChairs(FlowDataset):
                 self.image_list += [ [images[2*i], images[2*i+1]] ]
 
 
+
 class FlyingThings3D(FlowDataset):
+
     def __init__(self, aug_params=None, root='datasets/FlyingThings3D', dstype='frames_cleanpass'):
         super(FlyingThings3D, self).__init__(aug_params)
+        self.dstype = dstype
+        self.add_flyingthings()
+
+        self.pix_T_camXs =  np.array([[1050.0, 0.0, 480.0, 0],
+                                [0.0, 1050.0, 270.0, 0],
+                                [0.0, 0.0, 1.0, 0.0],
+                                [0.0, 0.0, 0.0, 1.0]])
+
+    def add_flyingthings(self, mode='TRAIN'):
+        root = osp.join(self.root, 'FlyingThings3D')
+
+        exclude = np.loadtxt('misc/exclude.txt', delimiter=' ', dtype=np.unicode_)
+        exclude = set(exclude)
+
+        # intrinsics
+        fx = 1050.0
+        fy = 1050.0
+        cx = 480.0
+        cy = 270.0
+
+        for cam in ['left', 'right']:
+            image_dirs = sorted(glob(osp.join(root, self.dstype, self.mode, '*/*')))
+            image_dirs = sorted([osp.join(f, cam) for f in image_dirs])
+
+            flow_dirs = sorted(glob(osp.join(root, 'optical_flow', self.mode, '*/*')))
+            flow_dirs_forw = sorted([osp.join(f, 'into_future', cam) for f in flow_dirs])
+            flow_dirs_back = sorted([osp.join(f, 'into_past', cam) for f in flow_dirs])
+
+            depth_dirs = sorted(glob(osp.join(root, 'disparity', self.mode, '*/*')))
+            depth_dirs = sorted([osp.join(f, cam) for f in depth_dirs])
+
+            delta_dirs = sorted(glob(osp.join(root, 'disparity_change', self.mode, '*/*')))
+            delta_dirs_forw = sorted([osp.join(f, 'into_future', cam) for f in delta_dirs])
+            delta_dirs_back = sorted([osp.join(f, 'into_past', cam) for f in delta_dirs])
+
+            label_dirs = depth_dirs
+            cam_dirs = sorted(glob(osp.join(root, 'camera_data', self.mode, '*/*')))
+
+            for idir, fdir_forw, fdir_back, ddir_forw, ddir_back, zdir, cdir, ldir in \
+                    zip(image_dirs, flow_dirs_forw, flow_dirs_back, delta_dirs_forw, delta_dirs_back, depth_dirs, cam_dirs, label_dirs):
+                
+                images = sorted(glob(osp.join(idir, '*.png')))
+                flows_forw = sorted(glob(osp.join(fdir_forw, '*.pfm')))
+                flows_back = sorted(glob(osp.join(fdir_back, '*.pfm')))
+
+                delta_forw = sorted(glob(osp.join(ddir_forw, '*.pfm')))
+                delta_back = sorted(glob(osp.join(ddir_back, '*.pfm')))
+                
+                depths = sorted(glob(osp.join(zdir, '*.pfm')))
+                labels = sorted(glob(osp.join(ldir, '*.pfm')))
+                
+                poses = self.read_camdata(osp.join(cdir, 'camera_data.txt'))
+                if len(poses) < len(images):
+                    continue
+
+                for i in range(1, len(images)-1):
+                    tag = '/'.join(images[i].split('/')[-5:])
+                    if tag in exclude:
+                        # print("Excluding %s" % tag)
+                        continue
+
+                    self.intrinsics_list += [np.array([fx, fy, cx, cy])]
+                    self.image_list += [[images[i], images[i+1]]]
+                    self.flow_list += [flows_forw[i]]
+                    self.delta_list += [delta_forw[i]]
+                    self.pose_list += [[poses[i], poses[i+1]]]
+                    self.depth_list += [[depths[i], depths[i+1]]]
+
+                    self.intrinsics_list += [np.array([fx, fy, cx, cy])]
+                    self.image_list += [[images[i], images[i-1]]]
+                    self.flow_list += [flows_back[i]]
+                    self.delta_list += [delta_back[i]]
+                    self.pose_list += [[poses[i], poses[i-1]]]
+                    self.depth_list += [[depths[i], depths[i-1]]]
+
+class FlyingThings3DOld(FlowDataset):
+    def __init__(self, aug_params=None, root='datasets/FlyingThings3D', dstype='frames_cleanpass'):
+        super(FlyingThings3DOld, self).__init__(aug_params)
 
         self.pix_T_camXs =  np.array([[1050.0, 0.0, 479.5, 0],
                             [0.0, 1050.0, 269.5, 0],

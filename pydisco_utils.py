@@ -25,6 +25,14 @@ def make_pcd(pts):
             if pts[:, 3:].max() > 1. else pts[:, 3:])
     return pcd
 
+def sceneflow_intrinsics_to_pydisco(intrinsics):
+    pix_T_camXs = eye_4x4(intrinsics.shape[0])
+    pix_T_camXs[:,0,0] = intrinsics[:, 0]
+    pix_T_camXs[:,1,1] = intrinsics[:, 1]
+    pix_T_camXs[:,0,2] = intrinsics[:, 2]
+    pix_T_camXs[:,1,2] = intrinsics[:, 3]
+    return pix_T_camXs
+
 def visualize_pcd(pts, rgb=None):
     if rgb != None:
         pts = torch.cat([pts, rgb], dim=-1)

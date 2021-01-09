@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
+from core.sceneflow import SceneFlow
 import pydisco_utils
 from torch.utils.data import DataLoader
 from raft import RAFT
@@ -95,7 +96,8 @@ def get_gt_scene_flow(flow_gt, depth1, depth2):
 def sequence_loss(motion_preds, flow_gt, valid, depth1, depth2, pix_T_camXs, gamma=0.8, max_flow=MAX_FLOW):
     """ Loss function defined over sequence of flow predictions """
 
-    scene_flow_gt = get_gt_scene_flow(flow_gt, depth1, depth2)
+    scene_flow_gt = flow_gt #get_gt_scene_flow(flow_gt, depth1, depth2)
+    scene_flow_gt = scene_flow_gt.permute(0,3,1,2)
     n_predictions = len(motion_preds)    
     flow_loss = 0.0
 
@@ -214,6 +216,12 @@ def normalize_image(image):
     std = torch.as_tensor([0.229, 0.224, 0.225], device=image.device)
     return (image/255.0).sub_(mean[:, None, None]).div_(std[:, None, None])
 
+def fetch_dataloader(args):
+    gpuargs = {'shuffle': True, 'num_workers': 4, 'drop_last' : True}
+    train_dataset = SceneFlow(do_augment=True, image_size=[320, 768])
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, **gpuargs)
+    return train_loader
+
 def train(args):
 
     model = nn.DataParallel(RAFT(args), device_ids=args.gpus)
@@ -228,7 +236,8 @@ def train(args):
     if args.stage != 'chairs':
         model.module.freeze_bn()
 
-    train_loader = datasets.fetch_dataloader(args)
+    # train_loader = datasets.fetch_dataloader(args)
+    train_loader = fetch_dataloader(args)
     optimizer, scheduler = fetch_optimizer(args, model)
 
     total_steps = 0
@@ -243,14 +252,21 @@ def train(args):
 
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
-            image1, image2, disp1, disp2, flow, valid = [x.cuda() for x in data_blob]
-
-            B = image1.shape[0]
-            pix_T_camXs = pydisco_utils.get_pix_T_camX(args.stage, image1.shape[0])
-            depth1 = pydisco_utils.disp2depth(torch.ones(B).cuda(), pix_T_camXs[:,0,0], disp1)
-            depth2 = pydisco_utils.disp2depth(torch.tensor(B).cuda(), pix_T_camXs[:,0,0], disp2)
+            # image1, image2, disp1, disp2, flow, valid = [x.cuda() for x in data_blob]
+            image1, image2, depth1, depth2, flowxyz, intrinsics = [x.cuda() for x in data_blob]
+            pix_T_camXs = pydisco_utils.sceneflow_intrinsics_to_pydisco(intrinsics)
+            depth1, depth2 = depth1.unsqueeze(1), depth2.unsqueeze(1)
+            # B = image1.shape[0]
+            # pix_T_camXs = pydisco_utils.get_pix_T_camX(args.stage, image1.shape[0])
+            # depth1 = pydisco_utils.disp2depth(torch.ones(B).cuda(), pix_T_camXs[:,0,0], disp1)
+            # depth2 = pydisco_utils.disp2depth(torch.tensor(B).cuda(), pix_T_camXs[:,0,0], disp2)
             
-            image1, image2, depth1, depth2, flow, valid, pix_T_camXs = rescale_stuff(image1, image2, depth1, depth2, flow, valid, pix_T_camXs)
+            # image1, image2, depth1, depth2, flow, valid, pix_T_camXs = rescale_stuff(image1, image2, depth1, depth2, flow, valid, pix_T_camXs)
+            # valid = (flowxyz[:, 0].abs() < 720) & (flowxyz[:, 1].abs() < 720)
+            valid = (depth1 < 255.0)
+            # valid = valid*valid_mask.squeeze()
+
+
             image1 = normalize_image(image1)
             image2 = normalize_image(image2)
 
@@ -260,7 +276,7 @@ def train(args):
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
 
             motion_predictions = model(image1, image2, depth1, depth2, pix_T_camXs, iters=args.iters)      
-            loss, metrics = sequence_loss(motion_predictions, flow, valid, depth1, depth2, pix_T_camXs, args.gamma)
+            loss, metrics = sequence_loss(motion_predictions, flowxyz, valid, depth1, depth2, pix_T_camXs, args.gamma)
             
             # loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
             scaler.scale(loss).backward()

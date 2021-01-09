@@ -137,7 +137,7 @@ class RAFT(nn.Module):
         for itr in range(iters):
             translations_zinv = translations_zinv.detach()
             translations = translations_zinv.clone()
-            translations[:,:,:,2] = 1./(translations_zinv[:,:,:,2] + 1e-5)
+            translations[:,:,:,2] = 1./(translations[:,:,:,2] + 1e-5)
 
             flow, coords1, d_dash = pydisco_utils.get_flow_field(depth1, translations, pix_T_camXs)
             d_dash_bar = pydisco_utils.grid_sample(inv_depth2, coords1)
@@ -151,10 +151,16 @@ class RAFT(nn.Module):
 
             # F(t+1) = F(t) + \Delta(t)
             translations_zinv = translations_zinv + revisions.permute(0,2,3,1)
+            translations = translations_zinv.clone()
+            translations[:,:,:,2] = 1./(translations[:,:,:,2])
 
-            translations_zinv_up = self.upsample_flow(translations_zinv.permute(0,3,1,2), up_mask)
-            translations_up = translations_zinv_up.clone()
-            translations_up[:,2] = 1./(translations_up[:,2])
+            translations_up = self.upsample_flow(translations.permute(0,3,1,2), up_mask)
+            # translations_zinv_up = translations_up.clone()
+            # translations_zinv_up[:,2] = 1./(translations_zinv_up[:,2])
+
+            # translations_zinv_up = self.upsample_flow(translations_zinv.permute(0,3,1,2), up_mask)
+            # translations_up = translations_zinv_up.clone()
+            # translations_up[:,2] = 1./(translations_up[:,2])
 
             motion_predictions.append(translations_up)
 
