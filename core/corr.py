@@ -2,21 +2,21 @@ import torch
 import torch.nn.functional as F
 from utils.utils import bilinear_sampler, coords_grid
 
+import ipdb
+st = ipdb.set_trace
 try:
     import alt_cuda_corr
 except:
     # alt_cuda_corr is not compiled
     pass
 
-import ipdb 
-st = ipdb.set_trace
 
 class CorrBlock:
     def __init__(self, fmap1, fmap2, num_levels=4, radius=4):
         self.num_levels = num_levels
         self.radius = radius
         self.corr_pyramid = []
-
+        # st()
         # all pairs correlation
         corr = CorrBlock.corr(fmap1, fmap2)
 
@@ -30,9 +30,8 @@ class CorrBlock:
 
     def __call__(self, coords):
         r = self.radius
-        coords = coords.permute(0, 2, 3, 1)
+        # coords = coords.permute(0, 2, 3, 1)
         batch, h1, w1, _ = coords.shape
-
         out_pyramid = []
         for i in range(self.num_levels):
             corr = self.corr_pyramid[i]

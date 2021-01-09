@@ -7,7 +7,10 @@ from update import BasicUpdateBlock, SmallUpdateBlock
 from extractor import BasicEncoder, SmallEncoder
 from corr import CorrBlock, AlternateCorrBlock
 from utils.utils import bilinear_sampler, coords_grid, upflow8
-
+from resnet_raft import FPN
+import ipdb 
+import pydisco_utils
+st = ipdb.set_trace
 try:
     autocast = torch.cuda.amp.autocast
 except:
@@ -34,9 +37,9 @@ class RAFT(nn.Module):
         
         else:
             self.hidden_dim = hdim = 128
-            self.context_dim = cdim = 128
+            self.context_dim = cdim = 128*3
             args.corr_levels = 4
-            args.corr_radius = 4
+            args.corr_radius = 3
 
         if 'dropout' not in self.args:
             self.args.dropout = 0
@@ -51,8 +54,10 @@ class RAFT(nn.Module):
             self.update_block = SmallUpdateBlock(self.args, hidden_dim=hdim)
 
         else:
-            self.fnet = BasicEncoder(output_dim=256, norm_fn='instance', dropout=args.dropout)        
-            self.cnet = BasicEncoder(output_dim=hdim+cdim, norm_fn='batch', dropout=args.dropout)
+            # self.fnet = BasicEncoder(output_dim=256, norm_fn='instance', dropout=args.dropout)        
+            self.fnet = BasicEncoder(output_dim=128, norm_fn='instance')
+            # self.cnet = BasicEncoder(output_dim=hdim+cdim, norm_fn='batch', dropout=args.dropout)
+            self.cnet = FPN(output_dim=hdim+3*hdim)
             self.update_block = BasicUpdateBlock(self.args, hidden_dim=hdim)
 
     def freeze_bn(self):
@@ -76,21 +81,34 @@ class RAFT(nn.Module):
         mask = torch.softmax(mask, dim=2)
 
         up_flow = F.unfold(8 * flow, [3,3], padding=1)
-        up_flow = up_flow.view(N, 2, 9, 1, 1, H, W)
+        up_flow = up_flow.view(N, 3, 9, 1, 1, H, W)
 
         up_flow = torch.sum(mask * up_flow, dim=2)
         up_flow = up_flow.permute(0, 1, 4, 2, 5, 3)
-        return up_flow.reshape(N, 2, 8*H, 8*W)
+        return up_flow.reshape(N, 3, 8*H, 8*W)
 
+    def initialize_translation(self, img):
+        translation =  torch.zeros((img.shape[0], img.shape[2]//8, img.shape[3]//8, 3)).to(img.device)
+        translation_zinv = translation
+        translation_zinv[:,:,:,2] = 0.1
+        return translation_zinv
 
-    def forward(self, image1, image2, iters=12, flow_init=None, upsample=True, test_mode=False):
+    def forward(self, image1, image2, depth1_fullres, depth2_fullres, pix_T_camXs_fullres, iters=12, flow_init=None, upsample=True, test_mode=False):
         """ Estimate optical flow between pair of frames """
 
-        image1 = 2 * (image1 / 255.0) - 1.0
-        image2 = 2 * (image2 / 255.0) - 1.0
+        # image1 = 2 * (image1 / 255.0) - 1.0
+        # image2 = 2 * (image2 / 255.0) - 1.0
 
-        image1 = image1.contiguous()
-        image2 = image2.contiguous()
+        # image1 = image1.contiguous()
+        # image2 = image2.contiguous()
+
+        depth1 = depth1_fullres[:,:,3::8, 3::8]
+        depth2 = depth2_fullres[:,:,3::8, 3::8]
+        pix_T_camXs = pydisco_utils.scale_intrinsics(pix_T_camXs_fullres, 1./8, 1./8)
+
+
+        inv_depth1 = 1./(depth1 + 1e-5)
+        inv_depth2 = 1./(depth2 + 1e-5)
 
         hdim = self.hidden_dim
         cdim = self.context_dim
@@ -113,32 +131,34 @@ class RAFT(nn.Module):
             net = torch.tanh(net)
             inp = torch.relu(inp)
 
-        coords0, coords1 = self.initialize_flow(image1)
+        translations_zinv = self.initialize_translation(image1)
+        motion_predictions = []
 
-        if flow_init is not None:
-            coords1 = coords1 + flow_init
-
-        flow_predictions = []
         for itr in range(iters):
-            coords1 = coords1.detach()
+            translations_zinv = translations_zinv.detach()
+            translations = translations_zinv.clone()
+            translations[:,:,:,2] = 1./(translations_zinv[:,:,:,2] + 1e-5)
+
+            flow, coords1, d_dash = pydisco_utils.get_flow_field(depth1, translations, pix_T_camXs)
+            d_dash_bar = pydisco_utils.grid_sample(inv_depth2, coords1)
+            redidual_depth = d_dash_bar - d_dash 
+
             corr = corr_fn(coords1) # index correlation volume
 
-            flow = coords1 - coords0
             with autocast(enabled=self.args.mixed_precision):
-                net, up_mask, delta_flow = self.update_block(net, inp, corr, flow)
+                net, revisions, weights, embeddings, up_mask = self.update_block(net, inp, corr, flow, redidual_depth, translations_zinv)
+                # net, up_mask, delta_flow = self.update_block(net, inp, corr, flow)
 
             # F(t+1) = F(t) + \Delta(t)
-            coords1 = coords1 + delta_flow
+            translations_zinv = translations_zinv + revisions.permute(0,2,3,1)
 
-            # upsample predictions
-            if up_mask is None:
-                flow_up = upflow8(coords1 - coords0)
-            else:
-                flow_up = self.upsample_flow(coords1 - coords0, up_mask)
-            
-            flow_predictions.append(flow_up)
+            translations_zinv_up = self.upsample_flow(translations_zinv.permute(0,3,1,2), up_mask)
+            translations_up = translations_zinv_up.clone()
+            translations_up[:,2] = 1./(translations_up[:,2])
+
+            motion_predictions.append(translations_up)
 
         if test_mode:
-            return coords1 - coords0, flow_up
+            return translations, translations_up
             
-        return flow_predictions
+        return motion_predictions
