@@ -4,7 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from update import BasicUpdateBlock, SmallUpdateBlock
-from extractor import BasicEncoder, SmallEncoder
+from update3d import BasicUpdateBlock3D
+from extractor import BasicEncoder, SmallEncoder, FPN
 from corr import CorrBlock, AlternateCorrBlock
 from utils.utils import bilinear_sampler, coords_grid, upflow8
 
@@ -37,9 +38,9 @@ class RAFT(nn.Module):
         
         else:
             self.hidden_dim = hdim = 128
-            self.context_dim = cdim = 128
+            self.context_dim = cdim = 128*3
             args.corr_levels = 4
-            args.corr_radius = 4
+            args.corr_radius = 3
 
         if 'dropout' not in self.args:
             self.args.dropout = 0
@@ -54,9 +55,10 @@ class RAFT(nn.Module):
             self.update_block = SmallUpdateBlock(self.args, hidden_dim=hdim)
 
         else:
-            self.fnet = BasicEncoder(output_dim=256, norm_fn='instance', dropout=args.dropout)        
-            self.cnet = BasicEncoder(output_dim=hdim+cdim, norm_fn='batch', dropout=args.dropout)
-            self.update_block = BasicUpdateBlock(self.args, hidden_dim=hdim)
+            self.fnet = BasicEncoder(output_dim=128, norm_fn='instance', dropout=args.dropout)        
+            # self.cnet = BasicEncoder(output_dim=hdim+3*hdim, norm_fn='batch', dropout=args.dropout)
+            self.cnet = FPN(output_dim=hdim+3*hdim)
+            self.update_block = BasicUpdateBlock3D(self.args, hidden_dim=hdim)
 
     def freeze_bn(self):
         for m in self.modules():

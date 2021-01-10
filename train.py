@@ -64,16 +64,39 @@ def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
         i_loss = (flow_preds[i] - flow_gt).abs()
         flow_loss += i_weight * (valid[:, None] * i_loss).mean()
 
-    epe = torch.sum((flow_preds[-1] - flow_gt)**2, dim=1).sqrt()
-    epe = epe.view(-1)[valid.view(-1)]
+    epe3d = torch.sum((flow_preds[-1] - flow_gt)**2, dim=1).sqrt()
+    epe3d = epe3d.view(-1)[valid.view(-1)]
+
+    epe2d = torch.sum((flow_preds[-1][:, :2] - flow_gt[:, :2])**2, dim=1).sqrt()
+    epe2d = epe2d.view(-1)[valid.view(-1)]
+
+    epe_depth = torch.sum((flow_preds[-1][:, 2:] - flow_gt[:, 2:])**2, dim=1).sqrt()
+    epe_depth = epe_depth.view(-1)[valid.view(-1)]
 
     metrics = {
-        'epe': epe.mean().item(),
-        '1px': (epe < 1).float().mean().item(),
-        '3px': (epe < 3).float().mean().item(),
-        '5px': (epe < 5).float().mean().item(),
-        '10px': (epe < 10).float().mean().item(),
-        '30px': (epe < 30).float().mean().item(),
+        'EPE3D/epe': epe3d.mean().item(),
+        'EPE3D/1px': (epe3d < 1).float().mean().item(),
+        'EPE3D/3px': (epe3d < 3).float().mean().item(),
+        'EPE3D/5px': (epe3d < 5).float().mean().item(),
+        'EPE3D/10px': (epe3d < 10).float().mean().item(),
+        'EPE3D/30px': (epe3d < 30).float().mean().item(),
+
+        'EPE2D/epe': epe2d.mean().item(),
+        'EPE2D/1px': (epe2d < 1).float().mean().item(),
+        'EPE2D/3px': (epe2d < 3).float().mean().item(),
+        'EPE2D/5px': (epe2d < 5).float().mean().item(),
+        'EPE2D/10px': (epe2d < 10).float().mean().item(),
+        'EPE2D/30px': (epe2d < 30).float().mean().item(),
+
+        'EPE_Depth/epe': epe_depth.mean().item(),
+        'EPE_Depth/3': (epe_depth < 3).float().mean().item(),
+        'EPE_Depth/5': (epe_depth < 5).float().mean().item(),
+        'EPE_Depth/10': (epe_depth < 10).float().mean().item(),
+        'EPE_Depth/30': (epe_depth < 30).float().mean().item(),
+        'EPE_Depth/1.0': (epe_depth < 1.0).float().mean().item(),
+        'EPE_Depth/0.1': (epe_depth < 0.1).float().mean().item(),
+        'EPE_Depth/0.05': (epe_depth < 0.05).float().mean().item(),
+        'loss': flow_loss.item()
     }
 
     return flow_loss, metrics
@@ -234,16 +257,16 @@ def train(args):
                 PATH = 'checkpoints/%d_%s.pth' % (total_steps+1, args.name)
                 torch.save(model.state_dict(), PATH)
 
-                results = {}
-                for val_dataset in args.validation:
-                    if val_dataset == 'chairs':
-                        results.update(evaluate.validate_chairs(model.module))
-                    elif val_dataset == 'sintel':
-                        results.update(evaluate.validate_sintel(model.module))
-                    elif val_dataset == 'kitti':
-                        results.update(evaluate.validate_kitti(model.module))
+                # results = {}
+                # for val_dataset in args.validation:
+                #     if val_dataset == 'chairs':
+                #         results.update(evaluate.validate_chairs(model.module))
+                #     elif val_dataset == 'sintel':
+                #         results.update(evaluate.validate_sintel(model.module))
+                #     elif val_dataset == 'kitti':
+                #         results.update(evaluate.validate_kitti(model.module))
 
-                logger.write_dict(results)
+                # logger.write_dict(results)
                 
                 model.train()
                 if args.stage != 'chairs':
