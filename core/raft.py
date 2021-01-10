@@ -95,7 +95,7 @@ class RAFT(nn.Module):
 
     def forward(self, image1, image2, depth1_fullres, depth2_fullres, pix_T_camXs_fullres, iters=12, flow_init=None, upsample=True, test_mode=False):
         """ Estimate optical flow between pair of frames """
-
+        return_dict = {}
         # image1 = 2 * (image1 / 255.0) - 1.0
         # image2 = 2 * (image2 / 255.0) - 1.0
 
@@ -130,6 +130,8 @@ class RAFT(nn.Module):
             net, inp = torch.split(cnet, [hdim, cdim], dim=1)
             net = torch.tanh(net)
             inp = torch.relu(inp)
+            return_dict['inp'] = inp.detach()
+            return_dict['net_0'] = net.detach()
 
         translations_zinv = self.initialize_translation(image1)
         motion_predictions = []
@@ -147,6 +149,7 @@ class RAFT(nn.Module):
 
             with autocast(enabled=self.args.mixed_precision):
                 net, revisions, weights, embeddings, up_mask = self.update_block(net, inp, corr, flow, redidual_depth, translations_zinv)
+                return_dict[f'net_{itr+1}'] = net.detach()
                 # net, up_mask, delta_flow = self.update_block(net, inp, corr, flow)
 
             # F(t+1) = F(t) + \Delta(t)
@@ -167,4 +170,4 @@ class RAFT(nn.Module):
         if test_mode:
             return translations, translations_up
             
-        return motion_predictions
+        return motion_predictions, return_dict

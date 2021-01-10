@@ -148,7 +148,7 @@ def fetch_optimizer(args, model):
     #     pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
 
     scheduler = optim.lr_scheduler.OneCycleLR(optimizer, args.lr, args.num_steps, pct_start=0.001, cycle_momentum=False)
-
+    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.5)
     return optimizer, scheduler
     
 
@@ -185,6 +185,16 @@ class Logger:
                     print("name, gradmean, steps: ", n, p.grad.abs().mean(), self.total_steps)
                     self.writer.add_histogram("grads/"+n+"_hist", p.grad.reshape(-1), self.total_steps) 
                     self.writer.add_scalar("grads/"+n+"_scal", p.grad.abs().mean(), self.total_steps) 
+
+    def push_dict(self, named_params):
+        if self.total_steps % SUM_FREQ == SUM_FREQ-1:
+            if self.writer is None:
+                self.writer = SummaryWriter()
+            # st()
+            for n, p in named_params.items():
+                print("name, outmean, steps: ", n, p.abs().mean(), self.total_steps)
+                self.writer.add_histogram("output/"+n+"_hist", p.reshape(-1), self.total_steps) 
+                self.writer.add_scalar("output/"+n+"_scal", p.abs().mean(), self.total_steps) 
 
 
     def push(self, metrics):
@@ -275,7 +285,7 @@ def train(args):
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
 
-            motion_predictions = model(image1, image2, depth1, depth2, pix_T_camXs, iters=args.iters)      
+            motion_predictions, return_dict = model(image1, image2, depth1, depth2, pix_T_camXs, iters=args.iters)      
             loss, metrics = sequence_loss(motion_predictions, flowxyz, valid, depth1, depth2, pix_T_camXs, args.gamma)
             
             # loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
@@ -289,6 +299,7 @@ def train(args):
 
             logger.push(metrics)
             logger.push_gradients(model.named_parameters())
+            logger.push_dict(return_dict)
 
             if total_steps % VAL_FREQ == VAL_FREQ - 1:
                 PATH = 'checkpoints/%d_%s.pth' % (total_steps+1, args.name)
