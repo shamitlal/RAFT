@@ -14,11 +14,14 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
+from core.sceneflow import SceneFlow
 from torch.utils.data import DataLoader
 from raft import RAFT
 import evaluate
 import datasets
 
+import ipdb 
+st = ipdb.set_trace
 from torch.utils.tensorboard import SummaryWriter
 
 try:
@@ -147,6 +150,12 @@ class Logger:
         self.writer.close()
 
 
+def fetch_dataloader(args):
+    gpuargs = {'shuffle': True, 'num_workers': 4, 'drop_last' : True}
+    train_dataset = SceneFlow(do_augment=True, image_size=args.image_size)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, **gpuargs)
+    return train_loader
+
 def train(args):
 
     model = nn.DataParallel(RAFT(args), device_ids=args.gpus)
@@ -161,7 +170,8 @@ def train(args):
     if args.stage != 'chairs':
         model.module.freeze_bn()
 
-    train_loader = datasets.fetch_dataloader(args)
+    train_loader = fetch_dataloader(args)
+    # train_loader = datasets.fetch_dataloader(args)
     optimizer, scheduler = fetch_optimizer(args, model)
 
     total_steps = 0
@@ -176,8 +186,10 @@ def train(args):
 
         for i_batch, data_blob in enumerate(train_loader):
             optimizer.zero_grad()
-            image1, image2, flow, valid = [x.cuda() for x in data_blob]
-
+            # image1, image2, flow, valid = [x.cuda() for x in data_blob]
+            image1, image2, depth1, depth2, flowxyz, intrinsics = [x.cuda() for x in data_blob]
+            valid = (flowxyz[...,0].abs() < 1000) & (flowxyz[...,1].abs() < 1000)
+            flow = flowxyz.permute(0,3,1,2)[:,:2]
             if args.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
