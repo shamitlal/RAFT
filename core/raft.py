@@ -83,14 +83,17 @@ class RAFT(nn.Module):
         return up_flow.reshape(N, 2, 8*H, 8*W)
 
 
-    def forward(self, image1, image2, iters=12, flow_init=None, upsample=True, test_mode=False):
+    def forward(self, image1, image2, depth1, depth2, pix_T_camXs, iters=12, flow_init=None, upsample=True, test_mode=False):
         """ Estimate optical flow between pair of frames """
 
-        image1 = 2 * (image1 / 255.0) - 1.0
-        image2 = 2 * (image2 / 255.0) - 1.0
+        # image1 = 2 * (image1 / 255.0) - 1.0
+        # image2 = 2 * (image2 / 255.0) - 1.0
 
         image1 = image1.contiguous()
         image2 = image2.contiguous()
+
+        inv_depth1 = 1./(depth1 + 1e-5)
+        inv_depth2 = 1./(depth2 + 1e-5)
 
         hdim = self.hidden_dim
         cdim = self.context_dim

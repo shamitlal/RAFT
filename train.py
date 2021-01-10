@@ -9,6 +9,8 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
+import pydisco_utils
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -156,6 +158,12 @@ def fetch_dataloader(args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, **gpuargs)
     return train_loader
 
+def normalize_image(image):
+    image = image[:, [2,1,0]]
+    mean = torch.as_tensor([0.485, 0.456, 0.406], device=image.device)
+    std = torch.as_tensor([0.229, 0.224, 0.225], device=image.device)
+    return (image/255.0).sub_(mean[:, None, None]).div_(std[:, None, None])
+
 def train(args):
 
     model = nn.DataParallel(RAFT(args), device_ids=args.gpus)
@@ -188,14 +196,23 @@ def train(args):
             optimizer.zero_grad()
             # image1, image2, flow, valid = [x.cuda() for x in data_blob]
             image1, image2, depth1, depth2, flowxyz, intrinsics = [x.cuda() for x in data_blob]
+            pix_T_camXs = pydisco_utils.sceneflow_intrinsics_to_pydisco(intrinsics)
+            
             valid = (flowxyz[...,0].abs() < 1000) & (flowxyz[...,1].abs() < 1000)
+            valid2 = (depth1 < 255.0)
+            valid = valid*valid2
+
+            image1 = normalize_image(image1)
+            image2 = normalize_image(image2)
+
             flow = flowxyz.permute(0,3,1,2)[:,:2]
             if args.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
                 image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
 
-            flow_predictions = model(image1, image2, iters=args.iters)            
+            # flow_predictions = model(image1, image2, iters=args.iters)   
+            flow_predictions = model(image1, image2, depth1, depth2, pix_T_camXs, iters=12)
 
             loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
             scaler.scale(loss).backward()
