@@ -13,6 +13,16 @@ class FlowHead(nn.Module):
     def forward(self, x):
         return self.conv2(self.relu(self.conv1(x)))
 
+class InvDepHead(nn.Module):
+    def __init__(self, input_dim=128, hidden_dim=256):
+        super(InvDepHead, self).__init__()
+        self.conv1 = nn.Conv2d(input_dim, hidden_dim, 3, padding=1)
+        self.conv2 = nn.Conv2d(hidden_dim, 1, 3, padding=1)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        return self.conv2(self.relu(self.conv1(x)))
+
 class ConvGRU(nn.Module):
     def __init__(self, hidden_dim=128, input_dim=192+128):
         super(ConvGRU, self).__init__()
@@ -84,17 +94,23 @@ class BasicMotionEncoder(nn.Module):
         self.convc2 = nn.Conv2d(256, 192, 3, padding=1)
         self.convf1 = nn.Conv2d(2, 128, 7, padding=3)
         self.convf2 = nn.Conv2d(128, 64, 3, padding=1)
-        self.conv = nn.Conv2d(64+192, 128-2, 3, padding=1)
+        self.convr1 = nn.Conv2d(1, 128, 7, padding=3)
+        self.convr2 = nn.Conv2d(128, 64, 3, padding=1)
+        self.conv = nn.Conv2d(64+192+64, 128-2, 3, padding=1)
 
-    def forward(self, flow, corr):
+    def forward(self, flow, corr, resdep):
         cor = F.relu(self.convc1(corr))
         cor = F.relu(self.convc2(cor))
+
         flo = F.relu(self.convf1(flow))
         flo = F.relu(self.convf2(flo))
 
-        cor_flo = torch.cat([cor, flo], dim=1)
+        rdep = F.relu(self.convr1(resdep))
+        rdep = F.relu(self.convr2(rdep))
+
+        cor_flo = torch.cat([cor, flo, rdep], dim=1)
         out = F.relu(self.conv(cor_flo))
-        return torch.cat([out, flow], dim=1)
+        return torch.cat([out, flow, resdep], dim=1)
 
 class SmallUpdateBlock(nn.Module):
     def __init__(self, args, hidden_dim=96):
@@ -116,24 +132,32 @@ class BasicUpdateBlock(nn.Module):
         super(BasicUpdateBlock, self).__init__()
         self.args = args
         self.encoder = BasicMotionEncoder(args)
-        self.gru = SepConvGRU(hidden_dim=hidden_dim, input_dim=128+hidden_dim)
+        self.gru = SepConvGRU(hidden_dim=hidden_dim, input_dim=129+hidden_dim)
         self.flow_head = FlowHead(hidden_dim, hidden_dim=256)
+        self.invdep_head = InvDepHead(hidden_dim, hidden_dim=256)
 
         self.mask = nn.Sequential(
             nn.Conv2d(128, 256, 3, padding=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(256, 64*9, 1, padding=0))
 
-    def forward(self, net, inp, corr, flow, upsample=True):
-        motion_features = self.encoder(flow, corr)
+        self.mask_invdep = nn.Sequential(
+            nn.Conv2d(128, 256, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 64*9, 1, padding=0))
+
+    def forward(self, net, inp, corr, flow, res_depth, upsample=True):
+        motion_features = self.encoder(flow, corr, 10*res_depth)
         inp = torch.cat([inp, motion_features], dim=1)
 
         net = self.gru(net, inp)
         delta_flow = self.flow_head(net)
+        delta_invdep = self.invdep_head(net)
 
         # scale mask to balence gradients
         mask = .25 * self.mask(net)
-        return net, mask, delta_flow
+        mask_invdep = .25 * self.mask_invdep(net)
+        return net, mask, mask_invdep, delta_flow, delta_invdep
 
 
 

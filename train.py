@@ -56,8 +56,8 @@ def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
     flow_loss = 0.0
 
     # exlude invalid pixels and extremely large diplacements
-    mag = torch.sum(flow_gt**2, dim=1).sqrt()
-    valid = (valid >= 0.5) & (mag < max_flow)
+    # mag = torch.sum(flow_gt**2, dim=1).sqrt()
+    # valid = (valid >= 0.5) & (mag < max_flow)
 
     for i in range(n_predictions):
         i_weight = gamma**(n_predictions - i - 1)
@@ -204,8 +204,11 @@ def train(args):
 
             image1 = normalize_image(image1)
             image2 = normalize_image(image2)
+            
+            depth1, depth2 = depth1.unsqueeze(1), depth2.unsqueeze(1)
+            flowxyz = flowxyz.permute(0,3,1,2)
+            flow = flowxyz[:,:2]
 
-            flow = flowxyz.permute(0,3,1,2)[:,:2]
             if args.add_noise:
                 stdv = np.random.uniform(0.0, 5.0)
                 image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
@@ -214,7 +217,8 @@ def train(args):
             # flow_predictions = model(image1, image2, iters=args.iters)   
             flow_predictions = model(image1, image2, depth1, depth2, pix_T_camXs, iters=12)
 
-            loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
+            # loss, metrics = sequence_loss(flow_predictions, flow, valid, args.gamma)
+            loss, metrics = sequence_loss(flow_predictions, flowxyz, valid, args.gamma)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)                
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)

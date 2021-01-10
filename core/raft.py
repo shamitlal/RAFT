@@ -8,6 +8,9 @@ from extractor import BasicEncoder, SmallEncoder
 from corr import CorrBlock, AlternateCorrBlock
 from utils.utils import bilinear_sampler, coords_grid, upflow8
 
+import pydisco_utils
+import ipdb 
+st = ipdb.set_trace
 try:
     autocast = torch.cuda.amp.autocast
 except:
@@ -69,6 +72,11 @@ class RAFT(nn.Module):
         # optical flow computed as difference: flow = coords1 - coords0
         return coords0, coords1
 
+    def initialize_inv_depth(self, depth):
+        invdep0 = 1./(depth)
+        invdep1 = invdep0 + 0.1
+        return invdep0, invdep1
+
     def upsample_flow(self, flow, mask):
         """ Upsample flow field [H/8, W/8, 2] -> [H, W, 2] using convex combination """
         N, _, H, W = flow.shape
@@ -82,8 +90,21 @@ class RAFT(nn.Module):
         up_flow = up_flow.permute(0, 1, 4, 2, 5, 3)
         return up_flow.reshape(N, 2, 8*H, 8*W)
 
+    def upsample_invdep(self, flow, mask):
+        """ Upsample flow field [H/8, W/8, 2] -> [H, W, 2] using convex combination """
+        N, _, H, W = flow.shape
+        mask = mask.view(N, 1, 9, 8, 8, H, W)
+        mask = torch.softmax(mask, dim=2)
 
-    def forward(self, image1, image2, depth1, depth2, pix_T_camXs, iters=12, flow_init=None, upsample=True, test_mode=False):
+        up_flow = F.unfold(8 * flow, [3,3], padding=1)
+        up_flow = up_flow.view(N, 1, 9, 1, 1, H, W)
+
+        up_flow = torch.sum(mask * up_flow, dim=2)
+        up_flow = up_flow.permute(0, 1, 4, 2, 5, 3)
+        return up_flow.reshape(N, 1, 8*H, 8*W)
+
+
+    def forward(self, image1, image2, depth1_, depth2_, pix_T_camXs, iters=12, flow_init=None, upsample=True, test_mode=False):
         """ Estimate optical flow between pair of frames """
 
         # image1 = 2 * (image1 / 255.0) - 1.0
@@ -91,6 +112,9 @@ class RAFT(nn.Module):
 
         image1 = image1.contiguous()
         image2 = image2.contiguous()
+
+        depth1 = depth1_[:,:,3::8, 3::8]
+        depth2 = depth2_[:,:,3::8, 3::8]
 
         inv_depth1 = 1./(depth1 + 1e-5)
         inv_depth2 = 1./(depth2 + 1e-5)
@@ -117,30 +141,38 @@ class RAFT(nn.Module):
             inp = torch.relu(inp)
 
         coords0, coords1 = self.initialize_flow(image1)
+        invdep0, invdep1 = self.initialize_inv_depth(depth1)
 
         if flow_init is not None:
             coords1 = coords1 + flow_init
 
         flow_predictions = []
+
         for itr in range(iters):
+            invdep1 = invdep1.detach()
             coords1 = coords1.detach()
             corr = corr_fn(coords1) # index correlation volume
 
+            d_dash_bar = pydisco_utils.grid_sample(inv_depth2, coords1.permute(0,2,3,1))
+            redidual_depth = d_dash_bar - invdep1 
+
             flow = coords1 - coords0
             with autocast(enabled=self.args.mixed_precision):
-                net, up_mask, delta_flow = self.update_block(net, inp, corr, flow)
+                net, up_mask, up_mask_invdep, delta_flow, delta_invdep = self.update_block(net, inp, corr, flow, redidual_depth)
 
             # F(t+1) = F(t) + \Delta(t)
             coords1 = coords1 + delta_flow
+            invdep1 = invdep1 + delta_invdep
 
             # upsample predictions
             if up_mask is None:
                 flow_up = upflow8(coords1 - coords0)
             else:
                 flow_up = self.upsample_flow(coords1 - coords0, up_mask)
-            
-            flow_predictions.append(flow_up)
-
+                invdep_up = self.upsample_invdep(invdep1 - invdep0, up_mask_invdep)
+            # st()
+            motion_up = torch.cat([flow_up, invdep_up], dim=1)
+            flow_predictions.append(motion_up)
         if test_mode:
             return coords1 - coords0, flow_up
             
