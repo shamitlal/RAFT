@@ -148,6 +148,7 @@ class BasicUpdateBlock(nn.Module):
 
     def forward(self, net, inp, corr, flow, res_depth, upsample=True):
         motion_features = self.encoder(flow, corr, 10*res_depth)
+        motion_features = motion_features.clamp(-50.0, 50.0)
         inp = torch.cat([inp, motion_features], dim=1)
 
         net = self.gru(net, inp)
