@@ -41,7 +41,7 @@ except:
 # exclude extremly large displacements
 MAX_FLOW = 400
 SUM_FREQ = 50
-VAL_FREQ = 5000
+VAL_FREQ = 2999
 
 
 def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
@@ -201,16 +201,16 @@ def train(args):
                 PATH = 'checkpoints/%d_%s.pth' % (total_steps+1, args.name)
                 torch.save(model.state_dict(), PATH)
 
-                results = {}
-                for val_dataset in args.validation:
-                    if val_dataset == 'chairs':
-                        results.update(evaluate.validate_chairs(model.module))
-                    elif val_dataset == 'sintel':
-                        results.update(evaluate.validate_sintel(model.module))
-                    elif val_dataset == 'kitti':
-                        results.update(evaluate.validate_kitti(model.module))
+                # results = {}
+                # for val_dataset in args.validation:
+                #     if val_dataset == 'chairs':
+                #         results.update(evaluate.validate_chairs(model.module))
+                #     elif val_dataset == 'sintel':
+                #         results.update(evaluate.validate_sintel(model.module))
+                #     elif val_dataset == 'kitti':
+                #         results.update(evaluate.validate_kitti(model.module))
 
-                logger.write_dict(results)
+                # logger.write_dict(results)
                 
                 model.train()
                 if args.stage != 'chairs':
