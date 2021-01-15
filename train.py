@@ -15,7 +15,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import cv2
 
+import flow_vis
 from core.sceneflow import SceneFlow
 from torch.utils.data import DataLoader
 from raft import RAFT
@@ -45,7 +47,7 @@ except:
 
 # exclude extremly large displacements
 MAX_FLOW = 400
-SUM_FREQ = 50
+SUM_FREQ = 100
 VAL_FREQ = 2500
 
 
@@ -58,10 +60,12 @@ def sequence_loss(flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
     # exlude invalid pixels and extremely large diplacements
     # mag = torch.sum(flow_gt**2, dim=1).sqrt()
     # valid = (valid >= 0.5) & (mag < max_flow)
-
+    depth_wt = torch.ones_like(flow_gt)
+    depth_wt[:,2] *= 100.
     for i in range(n_predictions):
         i_weight = gamma**(n_predictions - i - 1)
         i_loss = (flow_preds[i] - flow_gt).abs()
+        i_loss = i_loss*depth_wt
         flow_loss += i_weight * (valid[:, None] * i_loss).mean()
 
     epe3d = torch.sum((flow_preds[-1] - flow_gt)**2, dim=1).sqrt()
@@ -151,6 +155,40 @@ class Logger:
                     self.writer.add_scalar("grads/"+n+"_scal", p.grad.abs().mean(), self.total_steps) 
 
 
+    # flow -> BHWC
+    def push_flow(self, name, flow):
+        if self.total_steps % SUM_FREQ == SUM_FREQ-1:
+            flow = torch.clamp(flow, 0)
+            try:
+                flow_rgb_vis = flow_vis.flow_to_color(flow[0].cpu().detach().numpy(), convert_to_bgr=False)*1.0
+                flow_rgb_vis = torch.tensor(flow_rgb_vis).unsqueeze(0)
+                self.push_rgb(name, flow_rgb_vis.permute(0,3,1,2))
+            except Exception as e:
+                print("Exception in flow logging")
+                pass
+
+    # BHW
+    def push_heatmap(self, name, img):
+        if self.total_steps % SUM_FREQ == SUM_FREQ-1:
+            try:
+                img = 1./(img)
+                cmap = plt.get_cmap('jet')
+                grayscale = img[0].detach().cpu().numpy()
+                rgba_img = cmap(grayscale)
+                rgb_img = np.delete(rgba_img, 3, 2)
+                rgb_img = torch.tensor(rgb_img)
+                self.writer.add_image(name, rgb_img.permute(2,0,1), self.total_steps)
+            except Exception as e:
+                print("Exception in depth logging")
+                pass
+        
+    def push_rgb(self, name, rgb):
+
+        if self.total_steps % SUM_FREQ == SUM_FREQ-1:
+            if self.writer is None:
+                self.writer = SummaryWriter()
+            self.writer.add_image(name, rgb[0]/255., self.total_steps)
+
     def push(self, metrics):
         self.total_steps += 1
 
@@ -193,6 +231,7 @@ def train(args):
     print("Parameter Count: %d" % count_parameters(model))
 
     if args.restore_ckpt is not None:
+        print("Loading ckpt: ", args.restore_ckpt)
         model.load_state_dict(torch.load(args.restore_ckpt), strict=False)
 
     model.cuda()
@@ -209,13 +248,14 @@ def train(args):
     scaler = GradScaler(enabled=args.mixed_precision)
     logger = Logger(model, scheduler)
 
-    VAL_FREQ = 5000
+    VAL_FREQ = 2500
     add_noise = True
 
     should_keep_training = True
     while should_keep_training:
 
         for i_batch, data_blob in enumerate(train_loader):
+            print(f"Training for iteration {total_steps}")
             optimizer.zero_grad()
             # image1, image2, flow, valid = [x.cuda() for x in data_blob]
             image1, image2, depth1, depth2, flowxyz, intrinsics = [x.cuda() for x in data_blob]
@@ -245,13 +285,19 @@ def train(args):
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)                
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-            
+
+
             scaler.step(optimizer)
             scheduler.step()
             scaler.update()
 
             logger.push(metrics)
             logger.push_gradients(model.named_parameters())
+            logger.push_flow("flow/predicted_flow", flow_predictions[-1].permute(0,2,3,1)[...,:2])
+            logger.push_flow("flow/gt_flow", flowxyz.permute(0,2,3,1)[...,:2])
+
+            logger.push_heatmap("flow/pred_depth_inv", flow_predictions[-1].permute(0,2,3,1)[...,2])
+            logger.push_heatmap("flow/gt_depth_inv", flowxyz.permute(0,2,3,1)[...,2])
 
             if total_steps % VAL_FREQ == VAL_FREQ - 1:
                 PATH = 'checkpoints/%d_%s.pth' % (total_steps+1, args.name)
