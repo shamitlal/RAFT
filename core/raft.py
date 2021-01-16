@@ -90,8 +90,10 @@ class RAFT(nn.Module):
     def initialize_translation(self, img):
         translation =  torch.zeros((img.shape[0], img.shape[2]//8, img.shape[3]//8, 3)).to(img.device)
         translation_zinv = translation
-        translation_zinv[:,:,:,2] = 0.1
-        return translation_zinv
+        shape = translation_zinv.shape
+        translation_zinv = torch.randn(shape[0], shape[1], shape[2], shape[3])
+        # translation_zinv[:,:,:,2] = torch.randn(shape[0], shape[1], shape[2])
+        return translation_zinv.to(img.device)
 
     def forward(self, image1, image2, depth1_fullres, depth2_fullres, pix_T_camXs_fullres, iters=12, flow_init=None, upsample=True, test_mode=False):
         """ Estimate optical flow between pair of frames """
@@ -127,6 +129,7 @@ class RAFT(nn.Module):
         # run the context network
         with autocast(enabled=self.args.mixed_precision):
             cnet = self.cnet(image1)
+            # cnet = cnet*100.0
             net, inp = torch.split(cnet, [hdim, cdim], dim=1)
             net = torch.tanh(net)
             inp = torch.relu(inp)
@@ -142,6 +145,7 @@ class RAFT(nn.Module):
             translations[:,:,:,2] = 1./(translations[:,:,:,2] + 1e-5)
 
             flow, coords1, d_dash = pydisco_utils.get_flow_field(depth1, translations, pix_T_camXs)
+            # st()
             d_dash_bar = pydisco_utils.grid_sample(inv_depth2, coords1)
             redidual_depth = d_dash_bar - d_dash 
 

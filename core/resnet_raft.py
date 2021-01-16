@@ -10,7 +10,8 @@ MODEL_URL = 'https://download.pytorch.org/models/resnet50-19c8e357.pth'
 
 import torch.utils.checkpoint as checkpoint
 
-
+import ipdb 
+st = ipdb.set_trace
 class FPN(ResNet):
     def __init__(self, output_dim=512, depth_input=False):
         super(FPN, self).__init__(Bottleneck, [3, 4, 6, 3], norm_layer=nn.BatchNorm2d)
@@ -26,7 +27,6 @@ class FPN(ResNet):
         
     def _forward_impl(self, x):
         # See note [TorchScript super()]
-
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -35,11 +35,15 @@ class FPN(ResNet):
         x = self.layer1(x)
         x = self.layer2(x)
 
+        x = self.norm1(x) # New
+
         y = self.layer3(x)
         z = self.layer4(y)
 
         z = self.relu(self.uconv1(z))
         z = F.interpolate(z, x.shape[2:], mode='bilinear', align_corners=True)
+
+        z = self.norm2(z) # New
 
         x = torch.cat([x, z], dim=1)
         x = self.relu(self.uconv2(x))

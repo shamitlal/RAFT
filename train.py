@@ -105,7 +105,7 @@ def sequence_loss(motion_preds, flow_gt, valid, depth1, depth2, pix_T_camXs, gam
     # mag = torch.sum(flow_gt**2, dim=1).sqrt()
     # st()
     # valid = (valid >= 0.5) & (mag < max_flow)
-
+    depth_wt = torch.ones_like(flow_gt)
     for i in range(n_predictions):
         i_weight = gamma**(n_predictions - i - 1)
         flow_pred_i, coords1_i, d_dash_i = pydisco_utils.get_flow_field(depth1, motion_preds[i].permute(0,2,3,1), pix_T_camXs)
@@ -114,19 +114,32 @@ def sequence_loss(motion_preds, flow_gt, valid, depth1, depth2, pix_T_camXs, gam
         scene_flow_pred_i = torch.cat([flow_pred_i, inv_depth_change], dim=1)
 
         i_loss = (scene_flow_pred_i - scene_flow_gt).abs()
+        i_loss[:,2,:,:] = i_loss[:,2,:,:]*100.0
         flow_loss += i_weight * (valid[:, None] * i_loss).mean()
 
 
     epe = torch.sum((scene_flow_pred_i[:,:2] - scene_flow_gt[:,:2])**2, dim=1).sqrt()
     epe = epe.view(-1)[valid.view(-1)]
 
+    epe_depth = torch.sum((scene_flow_pred_i[:, 2:] - flow_gt.permute(0,3,1,2)[:, 2:])**2, dim=1).sqrt()
+    epe_depth = epe_depth.view(-1)[valid.view(-1)]
+
     metrics = {
-        'epe': epe.mean().item(),
-        '1px': (epe < 1).float().mean().item(),
-        '3px': (epe < 3).float().mean().item(),
-        '5px': (epe < 5).float().mean().item(),
-        '10px': (epe < 10).float().mean().item(),
-        '30px': (epe < 30).float().mean().item(),
+        'EPE2D/epe': epe.mean().item(),
+        'EPE2D/1px': (epe < 1).float().mean().item(),
+        'EPE2D/3px': (epe < 3).float().mean().item(),
+        'EPE2D/5px': (epe < 5).float().mean().item(),
+        'EPE2D/10px': (epe < 10).float().mean().item(),
+        'EPE2D/30px': (epe < 30).float().mean().item(),
+
+        'EPE_Depth/epe': epe_depth.mean().item(),
+        'EPE_Depth/1.0': (epe_depth < 1.0).float().mean().item(),
+        'EPE_Depth/0.1': (epe_depth < 0.1).float().mean().item(),
+        'EPE_Depth/0.05': (epe_depth < 0.05).float().mean().item(),
+        'EPE_Depth/0.01': (epe_depth < 0.01).float().mean().item(),
+        'EPE_Depth/0.005': (epe_depth < 0.005).float().mean().item(),
+        'EPE_Depth/0.001': (epe_depth < 0.001).float().mean().item(),
+
         'loss': flow_loss.item()
     }
     print("flow loss: ", flow_loss)

@@ -14,22 +14,22 @@ class FlowHead(nn.Module):
     def forward(self, x):
         return self.conv2(self.relu(self.conv1(x)))
 
-class ConvGRU(nn.Module):
-    def __init__(self, hidden_dim=128, input_dim=192+128):
-        super(ConvGRU, self).__init__()
-        self.convz = nn.Conv2d(hidden_dim+input_dim, hidden_dim, 3, padding=1)
-        self.convr = nn.Conv2d(hidden_dim+input_dim, hidden_dim, 3, padding=1)
-        self.convq = nn.Conv2d(hidden_dim+input_dim, hidden_dim, 3, padding=1)
+# class ConvGRU(nn.Module):
+#     def __init__(self, hidden_dim=128, input_dim=192+128):
+#         super(ConvGRU, self).__init__()
+#         self.convz = nn.Conv2d(hidden_dim+input_dim, hidden_dim, 3, padding=1)
+#         self.convr = nn.Conv2d(hidden_dim+input_dim, hidden_dim, 3, padding=1)
+#         self.convq = nn.Conv2d(hidden_dim+input_dim, hidden_dim, 3, padding=1)
 
-    def forward(self, h, x):
-        hx = torch.cat([h, x], dim=1)
+#     def forward(self, h, x):
+#         hx = torch.cat([h, x], dim=1)
 
-        z = torch.sigmoid(self.convz(hx))
-        r = torch.sigmoid(self.convr(hx))
-        q = torch.tanh(self.convq(torch.cat([r*h, x], dim=1)))
+#         z = torch.sigmoid(self.convz(hx))
+#         r = torch.sigmoid(self.convr(hx))
+#         q = torch.tanh(self.convq(torch.cat([r*h, x], dim=1)))
 
-        h = (1-z) * h + z * q
-        return h
+#         h = (1-z) * h + z * q
+#         return h
 
 # class SepConvGRU(nn.Module):
 #     def __init__(self, hidden_dim=128, input_dim=192+128):
@@ -59,6 +59,34 @@ class ConvGRU(nn.Module):
 #         h = (1-z) * h + z * q
 
 #         return h
+
+class ConvGRU(nn.Module):
+    def __init__(self, hidden_dim=128, input_dim=192+128):
+        super(ConvGRU, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.convz1 = nn.Conv2d(hidden_dim, hidden_dim, 3, padding=1)
+        self.convz2 = nn.Conv2d(hidden_dim, hidden_dim, 3, dilation=4, padding=4)
+
+        self.convr1 = nn.Conv2d(hidden_dim, hidden_dim, 3, padding=1)
+        self.convr2 = nn.Conv2d(hidden_dim, hidden_dim, 3, dilation=4, padding=4)
+
+        self.convq1 = nn.Conv2d(hidden_dim, hidden_dim, 3, padding=1)
+        self.convq2 = nn.Conv2d(hidden_dim, hidden_dim, 3, dilation=4, padding=4)
+
+    def forward(self, h, *inputs):
+        iz, ir, iq = 0, 0, 0
+        for inp in inputs:
+            inp = inp.split([self.hidden_dim]*3, dim=1)
+            iz = iz + inp[0]
+            ir = ir + inp[1]
+            iq = iq + inp[2]
+
+        z = torch.sigmoid(self.convz1(h) + self.convz2(h) + iz)
+        r = torch.sigmoid(self.convr1(h) + self.convr2(h) + ir)
+        q = torch.tanh(self.convq1(r*h) + self.convq2(r*h) + iq)
+
+        h = (1-z) * h + z * q
+        return h
 
 class SepConvGRU(nn.Module):
     def __init__(self, hidden_dim=128, input_dim=192+128):
@@ -147,8 +175,8 @@ class BasicUpdateBlock(nn.Module):
         self.encoder = BasicMotionEncoder(args)
         # if self.args.concatenate_gru_feats:
         #     self.conv1 = nn.Conv2d(384*3, 384, 3, padding=1)
-        
-        self.gru = SepConvGRU(hidden_dim=hidden_dim, input_dim=128*3)
+        self.gru = ConvGRU(hidden_dim=hidden_dim, input_dim=128*3)
+        # self.gru = SepConvGRU(hidden_dim=hidden_dim, input_dim=128*3)
         # self.flow_head = FlowHead(hidden_dim, hidden_dim=256)
 
         # TODO: change this when you replace translation with twist.
@@ -188,7 +216,7 @@ class BasicUpdateBlock(nn.Module):
     def forward(self, net, inp, corr, flow, residual_depth, translation, upsample=True):
         flow = flow.permute(0,3,1,2)
         translation = translation.permute(0,3,1,2)
-        motion_features = torch.cat([flow, 10*residual_depth, 10*translation], dim=1)
+        motion_features = torch.cat([flow, 100*residual_depth, 10*translation], dim=1)
         motion_features = motion_features.clamp(-50.0, 50.0)
         motion_features = self.input_processor(motion_features)
 
