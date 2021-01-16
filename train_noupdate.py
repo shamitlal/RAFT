@@ -161,12 +161,12 @@ def train(args):
 
                 maskimg[i, trajYs_source[0].long(), trajXs_source[0].long()] = 1
                 
-            # image1, image2, flow, valid = create_batch(images, flowimg, maskimg)
+            image1, image2, flow, valid = create_batch(images, flowimg, maskimg)
             
-            image1 = images[:, 0]
-            image2 = images[:, 1]
-            flow = flow_fw[:, 0]
-            valid = valid_fw[:, 0]
+            # image1 = images[:, 0]
+            # image2 = images[:, 1]
+            # flow = flow_fw[:, 0]
+            # valid = valid_fw[:, 0]
 
             # logger.push({})
             # logger.push_rgb("rgb", image1[0])
