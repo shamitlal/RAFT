@@ -34,11 +34,11 @@ class TrajNet():
         # grid_x = grid_x.repeat(B, Y_stepped, 1)
 
         # return grid_y, grid_x
-        grid_y = torch.arange(margin, Y-margin+1, sample_step, device=torch.device('cuda'), dtype=torch.float32)
+        grid_y = torch.arange(margin, Y-margin, sample_step, device=torch.device('cuda'), dtype=torch.float32)
         Y_stepped = grid_y.shape[0]
         grid_y = torch.reshape(grid_y, [1, Y_stepped, 1])
 
-        grid_x = torch.arange(margin, X-margin+1, sample_step, device=torch.device('cuda'), dtype=torch.float32)
+        grid_x = torch.arange(margin, X-margin, sample_step, device=torch.device('cuda'), dtype=torch.float32)
         X_stepped = grid_x.shape[0]
         grid_x = torch.reshape(grid_x, [1, 1, X_stepped])
 
@@ -93,7 +93,7 @@ class TrajNet():
         return traj_XYs, traj_Ts
 
     def get_trajectories(self, rgbs, flows_f, flows_b,
-                margin=0, sample_step=4,
+                margin=0, sample_step=1,
                 valids=None,
                 summ_writer=None,
                 born=True):
@@ -110,7 +110,6 @@ class TrajNet():
         assert(B==1)
 
         ys, xs = self.meshgrid2d(B, H, W, sample_step, margin) # B x H x W H->Y, W->X
-
         # print(xs)
 
         # xs = xs.reshape(-1) + 0.5
